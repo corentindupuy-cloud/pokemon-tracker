@@ -1,0 +1,168 @@
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Optional
+from uuid import UUID
+
+from pydantic import BaseModel, Field, HttpUrl
+
+
+class PokedexBase(BaseModel):
+    nom: str = ""
+    extension: str = ""
+    etat: str = "Near Mint"
+    url_cardmarket: str
+    image_url: Optional[str] = None
+    prix_actuel: Optional[float] = None
+    tendance_7j: Optional[float] = None
+
+
+class PokedexCreate(BaseModel):
+    url_cardmarket: str
+
+
+class PokedexOut(PokedexBase):
+    id: UUID
+    prix_moyen_ebay: Optional[float] = None
+    prix_min_ebay: Optional[float] = None
+    prix_max_ebay: Optional[float] = None
+    nb_ventes_ebay: Optional[int] = None
+    date_maj_ebay: Optional[datetime] = None
+    derniere_maj: Optional[datetime] = None
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class StockCreate(BaseModel):
+    pokedex_id: UUID
+    ref: Optional[str] = None
+    prix_achat: float
+    date_achat: Optional[date] = None
+    statut: str = "En stock"
+    source: Optional[str] = None
+    quantite: int = Field(1, ge=1)
+    notes: Optional[str] = None
+
+
+class StockUpdate(BaseModel):
+    statut: Optional[str] = None
+    prix_achat: Optional[float] = None
+    quantite: Optional[int] = Field(None, ge=1)
+    notes: Optional[str] = None
+
+
+class StockOut(BaseModel):
+    id: UUID
+    pokedex_id: Optional[UUID] = None
+    ref: Optional[str] = None
+    prix_achat: Optional[float] = None
+    date_achat: Optional[date] = None
+    statut: str = "En stock"
+    source: Optional[str] = None
+    quantite: int = Field(1, ge=1)
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    # jointures
+    nom: Optional[str] = None
+    extension: Optional[str] = None
+    image_url: Optional[str] = None
+    prix_actuel: Optional[float] = None
+    marge_latente: Optional[float] = None
+
+
+class RadarCreate(BaseModel):
+    pokedex_id: UUID
+    prix_cible: float
+    priorite: Optional[int] = Field(None, ge=1, le=5, description="1 = priorité max")
+    source_potentielle: Optional[str] = None
+    statut: str = "Actif"
+    notes: Optional[str] = None
+
+
+class RadarUpdate(BaseModel):
+    priorite: Optional[int] = Field(None, ge=1, le=5)
+    prix_cible: Optional[float] = None
+    statut: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class RadarOut(BaseModel):
+    id: UUID
+    pokedex_id: UUID
+    prix_cible: float
+    priorite: Optional[int] = None
+    source_potentielle: Optional[str] = None
+    urgence: Optional[str] = None
+    statut: str = "Actif"
+    notes: Optional[str] = None
+    created_at: Optional[datetime] = None
+    nom: Optional[str] = None
+    extension: Optional[str] = None
+    image_url: Optional[str] = None
+    prix_actuel: Optional[float] = None
+
+
+class VenteCreate(BaseModel):
+    stock_id: UUID
+    prix_vente: float
+    date_vente: Optional[date] = None
+    frais_plateforme: float = 0
+    plateforme: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class VenteOut(BaseModel):
+    id: UUID
+    stock_id: UUID
+    plateforme: Optional[str] = None
+    prix_vente: Optional[float] = None
+    date_vente: Optional[date] = None
+    frais_plateforme: float = 0
+    notes: Optional[str] = None
+    nom: Optional[str] = None
+    ref: Optional[str] = None
+    prix_achat: Optional[float] = None
+    benefice: Optional[float] = None
+
+
+class HistoriqueOut(BaseModel):
+    id: UUID
+    pokedex_id: UUID
+    prix: float
+    tendance_7j: Optional[float] = None
+    variation_j1_eur: Optional[float] = None
+    variation_j1_pct: Optional[float] = None
+    variation_j0_eur: Optional[float] = None
+    variation_j0_pct: Optional[float] = None
+    date: date
+
+
+class DashboardCharts(BaseModel):
+    labels: list[str]
+    valeur_stock: list[float]
+    chiffre_affaires: list[float]
+
+
+class DashboardKPIs(BaseModel):
+    capital_investi: float = 0
+    valeur_stock: float = 0
+    marge_latente_totale: float = 0
+    ca_total: float = 0
+    benefice_net: float = 0
+    marge_moyenne_pct: float = 0
+    nb_cartes_pokedex: int = 0
+    nb_en_stock: int = 0
+    nb_radar: int = 0
+    nb_vendus: int = 0
+
+
+class ScrapeResultOut(BaseModel):
+    success: bool
+    pokedex_id: Optional[UUID] = None
+    nom: Optional[str] = None
+    prix_actuel: Optional[float] = None
+    prix_moyen_ebay: Optional[float] = None
+    image_url: Optional[str] = None
+    error: Optional[str] = None

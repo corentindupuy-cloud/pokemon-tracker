@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pokémon Tracker</title>
+  <link rel="stylesheet" href="/static/style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <h1>⚡ Pokémon Tracker</h1>
+    <nav class="tabs" id="tabs">
+      <button data-tab="dashboard" class="active">Dashboard</button>
+      <button data-tab="pokedex">Pokédex</button>
+      <button data-tab="stock">Stock</button>
+      <button data-tab="radar">Radar</button>
+      <button data-tab="tendances">📈 Tendances</button>
+      <button data-tab="vendus">Vendus</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- Dashboard -->
+    <section id="panel-dashboard" class="panel active">
+      <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <h3>Valeur du stock (€)</h3>
+          <canvas id="chart-stock"></canvas>
+        </div>
+        <div class="chart-card">
+          <h3>Chiffre d'affaires (€)</h3>
+          <canvas id="chart-ca"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Pokédex -->
+    <section id="panel-pokedex" class="panel">
+      <div class="toolbar">
+        <input type="url" id="url-input" placeholder="URL CardMarket (https://www.cardmarket.com/fr/Pokemon/...)" />
+        <button class="btn btn-accent" id="btn-add-url">Ajouter</button>
+        <button class="btn" id="btn-scrape-all">🔄 Scraper tout</button>
+        <div class="loader" id="pokedex-loader"><span>⏳ Scraping en cours…</span></div>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Carte</th>
+            <th>Extension</th>
+            <th>État</th>
+            <th>Prix CM (€)</th>
+            <th>eBay 30j</th>
+            <th>Tendance 7j</th>
+            <th>MAJ</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pokedex-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Stock -->
+    <section id="panel-stock" class="panel">
+      <form class="add-form" id="form-stock">
+        <select id="stock-pokedex-id" required title="Carte Pokédex">
+          <option value="">— Carte (Pokédex) —</option>
+        </select>
+        <input type="text" id="stock-ref" placeholder="Réf (PKM-001)" />
+        <input type="number" id="stock-prix" step="0.01" min="0" placeholder="Prix achat €" required />
+        <input type="number" id="stock-quantite" min="1" step="1" value="1" placeholder="Qté" title="Quantité" />
+        <input type="date" id="stock-date" />
+        <select id="stock-statut">
+          <option value="En stock">En stock</option>
+          <option value="En vente">En vente</option>
+        </select>
+        <input type="text" id="stock-source" placeholder="Source" />
+        <button type="submit" class="btn btn-accent">+ Stock</button>
+      </form>
+      <div class="toolbar">
+        <select id="stock-filter">
+          <option value="">Tous statuts</option>
+          <option value="En stock">En stock</option>
+          <option value="En vente">En vente</option>
+        </select>
+        <button type="button" class="btn btn-ghost" id="btn-refresh-stock">Actualiser</button>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Carte</th>
+            <th>Réf</th>
+            <th>Prix achat</th>
+            <th title="Utilisez − / + ou saisissez la valeur">Qté</th>
+            <th>Cote CM</th>
+            <th>Marge latente</th>
+            <th>Statut</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="stock-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Radar -->
+    <section id="panel-radar" class="panel">
+      <form class="add-form" id="form-radar">
+        <select id="radar-pokedex-id" required>
+          <option value="">— Carte (Pokédex) —</option>
+        </select>
+        <input type="number" id="radar-prix-cible" step="0.01" min="0" placeholder="Prix cible €" required />
+        <select id="radar-priorite" title="Priorité (1 = max)">
+          <option value="">Priorité —</option>
+          <option value="5">★★★★★ (5)</option>
+          <option value="4">★★★★ (4)</option>
+          <option value="3">★★★ (3)</option>
+          <option value="2">★★ (2)</option>
+          <option value="1">★ (1)</option>
+        </select>
+        <input type="text" id="radar-source" placeholder="Source potentielle" />
+        <button type="submit" class="btn btn-accent">+ Radar</button>
+      </form>
+      <table>
+        <thead>
+          <tr>
+            <th>Carte</th>
+            <th>Priorité</th>
+            <th>Prix cible</th>
+            <th>Cote actuelle</th>
+            <th>Urgence</th>
+            <th>Statut</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="radar-tbody"></tbody>
+      </table>
+    </section>
+
+    <!-- Tendances -->
+    <section id="panel-tendances" class="panel">
+      <div class="toolbar">
+        <div class="segmented">
+          <button type="button" class="seg active" data-cat="all">Tous</button>
+          <button type="button" class="seg" data-cat="pokemon">Pokémon</button>
+          <button type="button" class="seg" data-cat="nba">NBA</button>
+        </div>
+        <button type="button" class="btn btn-ghost" id="btn-refresh-trending">Actualiser</button>
+      </div>
+
+      <div class="tendances-grid">
+        <div class="card">
+          <h2>Top ventes semaine</h2>
+          <p class="muted" id="trending-date"></p>
+          <table>
+            <thead>
+              <tr>
+                <th>Produit</th>
+                <th>Prix moyen</th>
+                <th>Nb ventes</th>
+                <th>Variation</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="trending-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Comparatif Pokédex (CM vs eBay)</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Carte</th>
+                <th>CM</th>
+                <th>eBay 30j</th>
+                <th>Écart</th>
+                <th>Volume</th>
+              </tr>
+            </thead>
+            <tbody id="compare-tbody"></tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>Opportunités détectées</h2>
+          <p class="muted">Si CM &lt; eBay (moy 30j) de plus de 20%</p>
+          <table>
+            <thead>
+              <tr>
+                <th>Carte</th>
+                <th>CM</th>
+                <th>eBay</th>
+                <th>Gain potentiel</th>
+              </tr>
+            </thead>
+            <tbody id="opps-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Vendus -->
+    <section id="panel-vendus" class="panel">
+      <form class="add-form" id="form-vente">
+        <select id="vente-stock-id" required>
+          <option value="">— Ligne stock —</option>
+        </select>
+        <input type="number" id="vente-prix" step="0.01" min="0" placeholder="Prix vente €" required />
+        <input type="number" id="vente-frais" step="0.01" min="0" placeholder="Frais €" value="0" />
+        <input type="text" id="vente-plateforme" placeholder="Plateforme (eBay, Vinted…)" />
+        <input type="date" id="vente-date" />
+        <button type="submit" class="btn btn-accent">+ Vente</button>
+      </form>
+      <table>
+        <thead>
+          <tr>
+            <th>Carte</th>
+            <th>Réf</th>
+            <th>Prix vente</th>
+            <th>Frais</th>
+            <th>Bénéfice</th>
+            <th>Date</th>
+            <th>Plateforme</th>
+          </tr>
+        </thead>
+        <tbody id="vendus-tbody"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <div class="modal-overlay" id="img-modal">
+    <button class="modal-close" id="modal-close">×</button>
+    <img id="modal-img" alt="Carte" />
+  </div>
+
+  <script src="/static/app.js?v=7"></script>
+</body>
+</html>
