@@ -10,15 +10,14 @@ import logging
 import os
 import random
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
 import httpx
-from playwright.sync_api import Page, TimeoutError as PlaywrightTimeout
-from playwright.sync_api import sync_playwright
+from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
+from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
 logger = logging.getLogger(__name__)
@@ -356,10 +355,10 @@ async def scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
     return await asyncio.to_thread(_scrape_ebay_sold_sync, nom, extension)
 
 
-def is_cloudflare_page(page: Page) -> bool:
+async def is_cloudflare_page(page: Page) -> bool:
     try:
-        title = page.title().lower()
-        content = page.content()
+        title = (await page.title()).lower()
+        content = await page.content()
     except Exception:
         return False
     markers = ("just a moment", "cf_chl", "challenge-platform", "enable javascript")
@@ -367,27 +366,27 @@ def is_cloudflare_page(page: Page) -> bool:
     return any(m in combined for m in markers)
 
 
-def human_delay(min_s: float = 0.8, max_s: float = 2.5) -> None:
-    time.sleep(random.uniform(min_s, max_s))
+async def human_delay(min_s: float = 0.8, max_s: float = 2.5) -> None:
+    await asyncio.sleep(random.uniform(min_s, max_s))
 
 
-def simulate_human(page: Page) -> None:
+async def simulate_human(page: Page) -> None:
     """Scroll et mouvements souris pour imiter un utilisateur (identique à update_cotes.py)."""
-    human_delay(0.4, 1.2)
+    await human_delay(0.4, 1.2)
     scroll = random.randint(150, 700)
-    page.evaluate(f"window.scrollBy({{ top: {scroll}, behavior: 'smooth' }})")
-    human_delay(0.3, 0.9)
+    await page.evaluate(f"window.scrollBy({{ top: {scroll}, behavior: 'smooth' }})")
+    await human_delay(0.3, 0.9)
     try:
         viewport = page.viewport_size or {"width": 1280, "height": 720}
         w, h = viewport["width"], viewport["height"]
-        page.mouse.move(
+        await page.mouse.move(
             random.randint(80, max(100, w - 80)),
             random.randint(80, max(100, h - 80)),
             steps=random.randint(8, 20),
         )
     except Exception:
         pass
-    human_delay(0.2, 0.7)
+    await human_delay(0.2, 0.7)
 
 
 # User-Agent identique à update_cotes.py
@@ -405,7 +404,7 @@ BROWSER_ARGS = [
 
 
 class CardMarketScraper:
-    """Navigateur Chromium headless avec playwright-stealth (config = update_cotes.py)."""
+    """Navigateur Chromium headless avec playwright-stealth (API async)."""
 
     def __init__(self, delay: float = DEFAULT_DELAY) -> None:
         self.delay = delay
@@ -414,90 +413,121 @@ class CardMarketScraper:
         self._context = None
         self._page: Optional[Page] = None
         self._stealth = Stealth(navigator_languages_override=("fr-FR", "fr"))
+        self._cm = None
 
-    def __enter__(self) -> CardMarketScraper:
-        self._cm = self._stealth.use_sync(sync_playwright())
-        self._playwright = self._cm.__enter__()
-        self._browser = self._playwright.chromium.launch(
+    async def __aenter__(self) -> CardMarketScraper:
+        self._cm = self._stealth.use_async(async_playwright())
+        self._playwright = await self._cm.__aenter__()
+        self._browser = await self._playwright.chromium.launch(
             headless=True,
             args=BROWSER_ARGS,
         )
-        self._context = self._browser.new_context(
+        self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             locale="fr-FR",
             timezone_id="Europe/Paris",
             user_agent=USER_AGENT,
         )
-        self._page = self._context.new_page()
+        self._page = await self._context.new_page()
         self._page.set_default_timeout(PAGE_TIMEOUT_MS)
         return self
 
-    def __exit__(self, *args: object) -> None:
+    async def __aexit__(self, *args: object) -> None:
         if self._browser:
-            self._browser.close()
-        if hasattr(self, "_cm"):
-            self._cm.__exit__(*args)
+            await self._browser.close()
+        if self._cm is not None:
+            await self._cm.__aexit__(*args)
 
-    def _throttle(self) -> None:
-        human_delay(self.delay * 0.8, self.delay * 1.4)
+    async def _throttle(self) -> None:
+        await human_delay(self.delay * 0.8, self.delay * 1.4)
 
-    def _goto(self, url: str) -> None:
+    async def _goto(self, url: str) -> None:
         assert self._page is not None
-        self._throttle()
+        await self._throttle()
         logger.debug("Navigation → %s", url)
-        self._page.goto(url, wait_until="domcontentloaded")
-        simulate_human(self._page)
-        if is_cloudflare_page(self._page):
-            human_delay(2.0, 4.0)
-            simulate_human(self._page)
-            if is_cloudflare_page(self._page):
+        await self._page.goto(url, wait_until="domcontentloaded")
+        await simulate_human(self._page)
+        if await is_cloudflare_page(self._page):
+            await human_delay(2.0, 4.0)
+            await simulate_human(self._page)
+            if await is_cloudflare_page(self._page):
                 raise RuntimeError("Page Cloudflare non contournée")
 
-    def scrape_url(self, url: str, etat: str = "Near Mint") -> ScrapeData:
+    async def scrape_url(self, url: str, etat: str = "Near Mint") -> ScrapeData:
         try:
             full_url = build_product_url(url, etat)
-            self._goto(full_url)
+            await self._goto(full_url)
             assert self._page
-            prices = self._page.evaluate(EXTRACT_PRICES_JS)
-            meta = self._page.evaluate(EXTRACT_META_JS)
+            prices = await self._page.evaluate(EXTRACT_PRICES_JS)
+            meta = await self._page.evaluate(EXTRACT_META_JS)
             prix = parse_euro_price(prices.get("priceText") or "")
             trend = parse_trend_float(prices.get("trend7d"))
             nom = (meta.get("title") or "").strip() or "Carte inconnue"
             extension = (meta.get("extension") or "").strip()
             image = normalize_image_url(meta.get("imageUrl"))
+            clean_url = url.split("?")[0]
             if not prix:
-                return ScrapeData(nom=nom, extension=extension, prix_actuel=None,
-                                tendance_7j=trend, image_url=image,
-                                url_cardmarket=url.split("?")[0], error="Prix non trouvé")
-            return ScrapeData(nom=nom, extension=extension, prix_actuel=prix,
-                              tendance_7j=trend, image_url=image, url_cardmarket=url.split("?")[0])
+                return ScrapeData(
+                    nom=nom,
+                    extension=extension,
+                    prix_actuel=None,
+                    tendance_7j=trend,
+                    image_url=image,
+                    url_cardmarket=clean_url,
+                    error="Prix non trouvé",
+                )
+            return ScrapeData(
+                nom=nom,
+                extension=extension,
+                prix_actuel=prix,
+                tendance_7j=trend,
+                image_url=image,
+                url_cardmarket=clean_url,
+            )
         except PlaywrightTimeout:
-            return ScrapeData(nom="", extension="", prix_actuel=None, tendance_7j=None,
-                              image_url=None, url_cardmarket=url, error="Timeout")
+            return ScrapeData(
+                nom="",
+                extension="",
+                prix_actuel=None,
+                tendance_7j=None,
+                image_url=None,
+                url_cardmarket=url,
+                error="Timeout",
+            )
         except RuntimeError as exc:
-            return ScrapeData(nom="", extension="", prix_actuel=None, tendance_7j=None,
-                              image_url=None, url_cardmarket=url, error=str(exc))
+            return ScrapeData(
+                nom="",
+                extension="",
+                prix_actuel=None,
+                tendance_7j=None,
+                image_url=None,
+                url_cardmarket=url,
+                error=str(exc),
+            )
         except Exception as exc:
-            return ScrapeData(nom="", extension="", prix_actuel=None, tendance_7j=None,
-                              image_url=None, url_cardmarket=url, error=str(exc))
+            return ScrapeData(
+                nom="",
+                extension="",
+                prix_actuel=None,
+                tendance_7j=None,
+                image_url=None,
+                url_cardmarket=url,
+                error=str(exc),
+            )
 
 
-async def scrape_cardmarket_url(url: str, etat: str = "Near Mint", delay: float = DEFAULT_DELAY) -> ScrapeData:
-    """Scrape async (thread pool) pour ne pas bloquer l'event loop."""
-    return await asyncio.to_thread(_scrape_sync, url, etat, delay)
-
-
-def _scrape_sync(url: str, etat: str, delay: float) -> ScrapeData:
-    with CardMarketScraper(delay=delay) as scraper:
-        return scraper.scrape_url(url, etat)
+async def scrape_cardmarket_url(
+    url: str, etat: str = "Near Mint", delay: float = DEFAULT_DELAY
+) -> ScrapeData:
+    """Scrape CardMarket (Playwright async, compatible FastAPI)."""
+    async with CardMarketScraper(delay=delay) as scraper:
+        return await scraper.scrape_url(url, etat)
 
 
 async def scrape_multiple(urls: list[tuple[str, str]]) -> list[ScrapeData]:
-    """Scrape séquentiel en thread (un browser) pour limiter la charge."""
-    def _batch() -> list[ScrapeData]:
-        results = []
-        with CardMarketScraper() as scraper:
-            for url, etat in urls:
-                results.append(scraper.scrape_url(url, etat))
-        return results
-    return await asyncio.to_thread(_batch)
+    """Scrape séquentiel (un navigateur, API async)."""
+    results: list[ScrapeData] = []
+    async with CardMarketScraper() as scraper:
+        for url, etat in urls:
+            results.append(await scraper.scrape_url(url, etat))
+    return results
