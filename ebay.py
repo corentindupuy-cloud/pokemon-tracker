@@ -16,7 +16,37 @@ logger = logging.getLogger(__name__)
 
 EBAY_FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
 EBAY_CACHE_HOURS = 6
-EBAY_SLEEP_S = 1.0
+EBAY_SLEEP_S = 2.0
+EBAY_API_DELAY_S = 2.0
+
+# Segments CardMarket à exclure des keywords (catégories produit, pas le nom commercial)
+_EBAY_CATEGORY_PARTS = frozenset(
+    {
+        "box sets",
+        "singles",
+        "booster",
+        "boosters",
+        "booster box",
+        "booster boxes",
+        "sealed products",
+        "display",
+        "theme deck",
+        "theme decks",
+        "trainer kits",
+        "elite trainer box",
+        "etb",
+        "collection",
+        "collections",
+        "tin",
+        "tins",
+        "lots",
+        "unsold lots",
+        "playmats",
+        "accessories",
+        "cardmarket",
+        "card market",
+    }
+)
 
 
 @dataclass
@@ -125,9 +155,63 @@ def _ebay_app_id() -> str:
     return os.getenv("EBAY_API_KEY", "").strip()
 
 
+def _is_category_part(part: str) -> bool:
+    p = part.strip().lower()
+    if not p:
+        return True
+    if p in _EBAY_CATEGORY_PARTS:
+        return True
+    return bool(re.match(r"^(box\s*sets?|single?s?|sealed\s+products?)$", p, re.I))
+
+
+def clean_nom_for_ebay(nom: str) -> str:
+    """
+    Extrait le nom commercial : retire « | Cardmarket », catégories (Box Sets…),
+    ne garde que le premier segment utile.
+    """
+    s = (nom or "").strip()
+    s = re.sub(r"\s*\|\s*card\s*market\s*", "", s, flags=re.I).strip()
+
+    if " | " in s:
+        segments = [p.strip() for p in s.split(" | ") if p.strip()]
+    else:
+        segments = [s] if s else []
+
+    for part in segments:
+        if _is_category_part(part):
+            continue
+        if re.match(r"^\s*card\s*market\s*$", part, re.I):
+            continue
+        return part
+
+    # repli : tout avant le premier « | »
+    if " | " in (nom or ""):
+        return (nom or "").split(" | ", 1)[0].strip()
+    return s
+
+
+def clean_extension_for_ebay(extension: str) -> str:
+    ext = (extension or "").strip()
+    if not ext or _is_category_part(ext):
+        return ""
+    return ext
+
+
 def build_keywords(nom: str, extension: str) -> str:
-    parts = [nom.strip(), extension.strip(), "Pokemon"]
-    return " ".join(p for p in parts if p)
+    """Nom commercial + extension (set) + Pokemon pour la recherche eBay."""
+    parts: list[str] = []
+    name = clean_nom_for_ebay(nom)
+    if name:
+        parts.append(name)
+    ext = clean_extension_for_ebay(extension)
+    if ext and ext.lower() != name.lower():
+        parts.append(ext)
+    keyword = " ".join(parts).strip()
+    if keyword and "pokemon" not in keyword.lower():
+        keyword = f"{keyword} Pokemon"
+    elif not keyword:
+        keyword = "Pokemon"
+    return keyword
 
 
 def _should_skip_keywords(keywords: str) -> bool:
@@ -166,6 +250,7 @@ def fetch_completed_items(
         "itemFilter(1).value": end_from,
     }
     if keywords:
+        logger.info(f"eBay keyword: {keywords}")
         params["keywords"] = keywords
 
     with httpx.Client(timeout=25.0) as client:
@@ -241,6 +326,7 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
     prices_30 = [s.prix_vente for s in sales_30 if s.prix_vente]
     avg30, min30, max30 = compute_stats(prices_30[:100])
 
+    time.sleep(EBAY_API_DELAY_S)
     sales_7 = fetch_completed_items(keywords=keywords, category_id="183454", days=7)
     prices_7 = [s.prix_vente for s in sales_7 if s.prix_vente]
     avg7, min7, max7 = compute_stats(prices_7[:100])
@@ -267,7 +353,7 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
         }
     ).eq("id", pokedex_id).execute()
 
-    # throttling quota
+    # throttling quota (sync cartes en rafale)
     time.sleep(EBAY_SLEEP_S)
 
     return {

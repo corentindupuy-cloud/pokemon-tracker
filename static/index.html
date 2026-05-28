@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Pokémon Tracker</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/style.css?v={{STATIC_VERSION}}" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -44,21 +44,23 @@
         <button class="btn" id="btn-scrape-all">Scraper tout</button>
         <div class="loader" id="pokedex-loader"><span>Scraping en cours…</span></div>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Carte</th>
-            <th>Extension</th>
-            <th>État</th>
-            <th>Prix CM (€)</th>
-            <th>eBay 30j</th>
-            <th>Tendance 7j</th>
-            <th>MAJ</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody id="pokedex-tbody"></tbody>
-      </table>
+      <div class="table-scroll">
+        <table class="pokedex-table">
+          <thead>
+            <tr>
+              <th>Carte</th>
+              <th>Extension</th>
+              <th>État</th>
+              <th>Prix CM (€)</th>
+              <th>eBay 30j</th>
+              <th>Tendance 7j</th>
+              <th>MAJ</th>
+              <th class="actions-col-h">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="pokedex-tbody"></tbody>
+        </table>
+      </div>
     </section>
 
     <!-- Stock -->
@@ -234,6 +236,6 @@
     <img id="modal-img" alt="Carte" />
   </div>
 
-  <script src="/static/app.js?v=8"></script>
+  <script src="/static/app.js?v={{STATIC_VERSION}}"></script>
 </body>
 </html>

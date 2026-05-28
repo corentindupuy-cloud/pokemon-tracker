@@ -71,6 +71,16 @@ STATIC_DIR = Path(__file__).parent / "static"
 scheduler = AsyncIOScheduler()
 
 
+def _static_asset_version() -> str:
+    """Version cache-bust basée sur la date de modif des assets (évite JS/CSS obsolètes)."""
+    mtimes: list[float] = []
+    for name in ("app.js", "style.css", "index.html"):
+        path = STATIC_DIR / name
+        if path.is_file():
+            mtimes.append(path.stat().st_mtime)
+    return str(int(max(mtimes))) if mtimes else "1"
+
+
 async def scheduled_scrape_job() -> None:
     logger.info("Scraping planifié 8h00")
     try:
@@ -196,7 +206,15 @@ if STATIC_DIR.exists():
 async def index():
     html_path = STATIC_DIR / "index.html"
     if html_path.exists():
-        return HTMLResponse(html_path.read_text(encoding="utf-8"))
+        html = html_path.read_text(encoding="utf-8")
+        html = html.replace("{{STATIC_VERSION}}", _static_asset_version())
+        return HTMLResponse(
+            html,
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            },
+        )
     return HTMLResponse("<h1>Pokémon Tracker</h1><p>static/index.html manquant</p>")
 
 

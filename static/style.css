@@ -292,6 +292,131 @@ button.btn-sm {
 }
 .actions-cell { white-space: nowrap; }
 .actions-cell .btn-delete { vertical-align: middle; }
+
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 0.5rem;
+}
+
+.table-scroll table {
+  border: none;
+  border-radius: 0;
+  margin: 0;
+}
+
+.pokedex-table { min-width: 800px; }
+
+.card-col { min-width: 200px; max-width: 280px; }
+
+.pokedex-table th,
+.pokedex-table td {
+  vertical-align: middle;
+}
+
+.actions-col,
+.actions-col-h {
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: var(--surface);
+  box-shadow: -6px 0 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  text-align: center;
+  vertical-align: middle;
+  min-width: 5.5rem;
+  padding: 0.5rem !important;
+}
+
+th.actions-col-h {
+  background: var(--surface2);
+  z-index: 4;
+}
+
+tr:hover .actions-col {
+  background: #1e2a3d;
+}
+
+.pokedex-actions {
+  display: inline-flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  vertical-align: middle;
+}
+
+.card-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: nowrap;
+}
+
+.card-cell-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.card-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+}
+
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  flex-shrink: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #fff;
+  transition: opacity 0.15s ease;
+  vertical-align: middle;
+}
+
+.btn-icon .icon {
+  width: 18px;
+  height: 18px;
+  display: block;
+  flex-shrink: 0;
+}
+
+.btn-icon:hover {
+  opacity: 0.82;
+}
+
+.btn-icon:active {
+  opacity: 0.65;
+}
+
+.btn-icon-sync {
+  background: rgba(37, 99, 235, 0.55);
+}
+
+.btn-icon-sync.is-loading .icon {
+  animation: spin 0.85s linear infinite;
+}
+
+.btn-icon-delete {
+  background: rgba(220, 38, 38, 0.55);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
 .ebay-price { cursor: help; white-space: nowrap; }
 .ebay-under-cm { color: #4ade80; }
 .ebay-over-cm { color: #f87171; }
@@ -302,7 +427,6 @@ table {
   border-collapse: collapse;
   background: var(--surface);
   border-radius: var(--radius);
-  overflow: hidden;
   border: 1px solid var(--border);
 }
 
@@ -316,12 +440,6 @@ th, td {
 th { background: var(--surface2); color: var(--muted); font-weight: 600; }
 
 tr:hover td { background: rgba(59, 130, 246, 0.08); }
-
-.card-cell {
-  display: flex;
-  align-items: center;
-  gap: 0.65rem;
-}
 
 .thumb {
   width: 60px;

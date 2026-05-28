@@ -27,7 +27,7 @@ let pokedexCache = [];
 async function loadPokedexOptions() {
   pokedexCache = await api("/api/pokedex");
   const opts = pokedexCache.map((c) => {
-    const label = `${c.nom}${c.extension ? ` — ${c.extension}` : ""}`;
+    const label = `${displayNom(c.nom)}${c.extension ? ` — ${c.extension}` : ""}`;
     return `<option value="${c.id}">${label}</option>`;
   }).join("");
   const empty = '<option value="">— Carte (Pokédex) —</option>';
@@ -53,6 +53,15 @@ function escapeAttr(text) {
     .replace(/"/g, "&quot;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+/** Nom affiché (sans suffixe « | Cardmarket » issu du scrape). */
+function displayNom(nom) {
+  if (nom == null || nom === "") return "—";
+  const cleaned = String(nom)
+    .replace(/\s*\|\s*Cardmarket\s*/gi, "")
+    .trim();
+  return cleaned || "—";
 }
 
 function thumbHtml(imageUrl, tooltip = "") {
@@ -87,21 +96,51 @@ function thumbFallback(img) {
 }
 
 /**
- * Cellule tableau : miniature + nom.
+ * Cellule tableau : miniature + nom (+ actions optionnelles).
  * @param {object} row — doit contenir nom, image_url, extension (optionnels)
+ * @param {string} [actionsHtml] — boutons Sync / supprimer (Pokédex)
  */
-function cardCell(row) {
-  const name = row?.nom || "—";
+function cardCell(row, actionsHtml = "") {
+  const name = displayNom(row?.nom);
   const imageUrl = row?.image_url || null;
   const tooltip = [name, row?.extension].filter((x) => x && x !== "—").join(" — ");
   const thumb = thumbHtml(imageUrl, tooltip);
   const extHtml = row?.extension
     ? `<br><small style="color:var(--muted)">${escapeAttr(row.extension)}</small>`
     : "";
+  const actions = actionsHtml
+    ? `<div class="card-actions">${actionsHtml}</div>`
+    : "";
   return (
     `<div class="card-cell">` +
     `${thumb}` +
-    `<div><strong>${escapeAttr(name)}</strong>${extHtml}</div>` +
+    `<div class="card-cell-info"><strong>${escapeAttr(name)}</strong>${extHtml}</div>` +
+    `${actions}` +
+    `</div>`
+  );
+}
+
+function iconSync() {
+  return (
+    `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+    `<path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.94 7.94 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.94 7.94 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>` +
+    `</svg>`
+  );
+}
+
+function iconTrash() {
+  return (
+    `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">` +
+    `<path fill="currentColor" d="M9 3h6l1 2h4v2H4V5h4l1-2zm1 6h2v9h-2V9zm4 0h2v9h-2V9zM7 9h2v9H7V9zm-1 11h10a2 2 0 0 0 2-2V9H4v9a2 2 0 0 0 2 2z"/>` +
+    `</svg>`
+  );
+}
+
+function pokedexActionsHtml(id) {
+  return (
+    `<div class="pokedex-actions">` +
+    `<button type="button" class="btn-icon btn-icon-sync btn-scrape-one" data-id="${id}" title="Rescraper cette carte" aria-label="Rescraper">${iconSync()}</button>` +
+    `<button type="button" class="btn-icon btn-icon-delete btn-delete btn-delete-pokedex" data-id="${id}" title="Supprimer" aria-label="Supprimer">${iconTrash()}</button>` +
     `</div>`
   );
 }
@@ -473,17 +512,14 @@ async function loadPokedex() {
   }
   tb.innerHTML = rows.map((r) => `
     <tr>
-      <td>${cardCell(r)}</td>
+      <td class="card-col">${cardCell(r)}</td>
       <td>${r.extension || "—"}</td>
       <td>${r.etat || "—"}</td>
       <td>${fmtEur(r.prix_actuel)}</td>
       <td>${ebayCell(r)}</td>
       <td>${r.tendance_7j != null ? r.tendance_7j : "—"}</td>
       <td>${fmtDate(r.derniere_maj)}</td>
-      <td class="actions-cell">
-        <button type="button" class="btn btn-ghost btn-scrape-one btn-sm" data-id="${r.id}" title="Rescraper">Sync</button>
-        <button type="button" class="btn-delete btn-delete-pokedex btn-sm" data-id="${r.id}" title="Supprimer">X</button>
-      </td>
+      <td class="actions-col">${pokedexActionsHtml(r.id)}</td>
     </tr>
   `).join("");
 
@@ -499,6 +535,8 @@ async function loadPokedex() {
     btn.onclick = async () => {
       const loader = $("#pokedex-loader");
       loader.classList.add("show");
+      btn.classList.add("is-loading");
+      btn.disabled = true;
       try {
         await api(`/api/pokedex/${btn.dataset.id}/scrape`, { method: "POST" });
         await loadPokedex();
@@ -506,6 +544,8 @@ async function loadPokedex() {
         alert(e.message);
       } finally {
         loader.classList.remove("show");
+        btn.classList.remove("is-loading");
+        btn.disabled = false;
       }
     };
   });
@@ -684,7 +724,7 @@ async function loadVendus() {
   }
   tb.innerHTML = rows.map((r) => `
     <tr>
-      <td>${r.nom || "—"}</td>
+      <td>${displayNom(r.nom)}</td>
       <td>${r.ref || "—"}</td>
       <td>${fmtEur(r.prix_vente)}</td>
       <td>${fmtEur(r.frais_plateforme)}</td>
