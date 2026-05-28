@@ -280,6 +280,16 @@ button.btn-delete {
   line-height: 1;
 }
 button.btn-delete:hover { opacity: 0.75; }
+button.btn-sm {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.45rem;
+  min-width: 2rem;
+}
+.ebay-tag {
+  font-size: 0.7rem;
+  font-weight: 800;
+  margin-right: 0.2rem;
+}
 .actions-cell { white-space: nowrap; }
 .actions-cell .btn-delete { vertical-align: middle; }
 .ebay-price { cursor: help; white-space: nowrap; }

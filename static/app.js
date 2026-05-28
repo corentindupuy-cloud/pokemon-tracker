@@ -66,7 +66,7 @@ function thumbHtml(imageUrl, tooltip = "") {
       `onerror="thumbFallback(this)" />`
     );
   }
-  return `<div class="thumb-placeholder" title="${title}">🎴</div>`;
+  return `<div class="thumb-placeholder" title="${title}">IMG</div>`;
 }
 
 function thumbFallback(img) {
@@ -82,7 +82,7 @@ function thumbFallback(img) {
   img.replaceWith(Object.assign(document.createElement("div"), {
     className: "thumb-placeholder",
     title,
-    textContent: "🎴",
+    textContent: "IMG",
   }));
 }
 
@@ -110,8 +110,8 @@ function urgenceBadge(u) {
   if (!u) return '<span class="badge badge-muted">—</span>';
   const map = { "Bonne affaire": "green", "À surveiller": "yellow", "Trop cher": "red" };
   const cls = map[u] || "muted";
-  const icon = cls === "green" ? "🟢" : cls === "yellow" ? "🟡" : cls === "red" ? "🔴" : "";
-  return `<span class="badge badge-${cls}">${icon} ${escapeAttr(u)}</span>`;
+  const tag = cls === "green" ? "+" : cls === "yellow" ? "~" : cls === "red" ? "-" : "";
+  return `<span class="badge badge-${cls}">${tag} ${escapeAttr(u)}</span>`;
 }
 
 function prioriteStars(n) {
@@ -132,16 +132,16 @@ function fmtEur(v) {
 function ebayCell(row) {
   if (row.prix_moyen_ebay == null) return "—";
   const cm = row.prix_actuel;
-  let icon = "⚪";
+  let tag = "=";
   let cls = "ebay-neutral";
   if (cm != null && cm > 0) {
     const diff = Math.abs(row.prix_moyen_ebay - cm) / cm;
     if (diff >= 0.1) {
       if (row.prix_moyen_ebay > cm) {
-        icon = "🟢";
+        tag = "eBay+";
         cls = "ebay-under-cm";
       } else {
-        icon = "🔴";
+        tag = "eBay-";
         cls = "ebay-over-cm";
       }
     }
@@ -151,7 +151,7 @@ function ebayCell(row) {
     `Max: ${fmtEur(row.prix_max_ebay)}`,
     `${row.nb_ventes_ebay ?? 0} vente(s) sur 30j`,
   ].join(" · ");
-  return `<span class="ebay-price ${cls}" title="${escapeAttr(tip)}">${icon} ${fmtEur(row.prix_moyen_ebay)}</span>`;
+  return `<span class="ebay-price ${cls}" title="${escapeAttr(tip)}"><span class="ebay-tag">${tag}</span> ${fmtEur(row.prix_moyen_ebay)}</span>`;
 }
 
 function pct(n) {
@@ -169,8 +169,8 @@ function diffPct(a, b) {
 function diffBadge(v) {
   if (v == null) return `<span class="badge badge-muted">—</span>`;
   const cls = v >= 20 ? "green" : v <= -20 ? "red" : Math.abs(v) < 10 ? "muted" : v > 0 ? "yellow" : "yellow";
-  const icon = cls === "green" ? "🟢" : cls === "red" ? "🔴" : "⚪";
-  return `<span class="badge badge-${cls}">${icon} ${pct(v)}</span>`;
+  const tag = cls === "green" ? "HAUSSE" : cls === "red" ? "BAISSE" : "=";
+  return `<span class="badge badge-${cls}">${tag} ${pct(v)}</span>`;
 }
 
 function qtyCell(row) {
@@ -241,7 +241,7 @@ async function loadCompareAndOpps() {
           <td>${cardCell(r)}</td>
           <td>${fmtEur(cm)}</td>
           <td>${fmtEur(eb)}</td>
-          <td>💡 ${fmtEur(gain)} (${pct(d)})</td>
+          <td><span class="badge badge-green">OPP</span> ${fmtEur(gain)} (${pct(d)})</td>
         </tr>
       `, score: d });
     }
@@ -481,8 +481,8 @@ async function loadPokedex() {
       <td>${r.tendance_7j != null ? r.tendance_7j : "—"}</td>
       <td>${fmtDate(r.derniere_maj)}</td>
       <td class="actions-cell">
-        <button type="button" class="btn btn-ghost btn-scrape-one" data-id="${r.id}" title="Rescraper">🔄</button>
-        <button type="button" class="btn-delete btn-delete-pokedex" data-id="${r.id}" title="Supprimer">🗑️</button>
+        <button type="button" class="btn btn-ghost btn-scrape-one btn-sm" data-id="${r.id}" title="Rescraper">Sync</button>
+        <button type="button" class="btn-delete btn-delete-pokedex btn-sm" data-id="${r.id}" title="Supprimer">X</button>
       </td>
     </tr>
   `).join("");
@@ -565,7 +565,7 @@ async function loadStock() {
       <td>${fmtEur(r.prix_actuel)}</td>
       <td class="${mCls}">${m != null ? fmtEur(m) : "—"}</td>
       <td><span class="badge badge-muted">${r.statut}</span></td>
-      <td><button type="button" class="btn-delete btn-delete-stock" data-id="${r.id}" title="Supprimer">🗑️</button></td>
+      <td><button type="button" class="btn-delete btn-delete-stock btn-sm" data-id="${r.id}" title="Supprimer">X</button></td>
     </tr>`;
   }).join("");
 
@@ -629,7 +629,7 @@ async function loadRadar() {
       <td>${fmtEur(r.prix_actuel)}</td>
       <td>${urgenceBadge(r.urgence)}</td>
       <td>${r.statut || "—"}</td>
-      <td><button type="button" class="btn-delete btn-delete-radar" data-id="${r.id}" title="Supprimer">🗑️</button></td>
+      <td><button type="button" class="btn-delete btn-delete-radar btn-sm" data-id="${r.id}" title="Supprimer">X</button></td>
     </tr>
   `).join("");
 

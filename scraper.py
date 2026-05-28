@@ -21,6 +21,13 @@ from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
 logger = logging.getLogger(__name__)
+log = logger
+
+
+def _diag(msg: str, *args: object) -> None:
+    text = msg % args if args else msg
+    log.info(text)
+    print(text, flush=True)
 
 BASE_URL = "https://www.cardmarket.com"
 POKEMON_SEARCH_URL = f"{BASE_URL}/fr/Pokemon/Products/Search"
@@ -416,12 +423,15 @@ class CardMarketScraper:
         self._cm = None
 
     async def __aenter__(self) -> CardMarketScraper:
+        _diag("Playwright: demarrage (stealth + async_playwright)")
         self._cm = self._stealth.use_async(async_playwright())
         self._playwright = await self._cm.__aenter__()
+        _diag("Playwright launch() appele")
         self._browser = await self._playwright.chromium.launch(
             headless=True,
             args=BROWSER_ARGS,
         )
+        _diag("Playwright: browser lance, creation contexte")
         self._context = await self._browser.new_context(
             viewport={"width": 1920, "height": 1080},
             locale="fr-FR",
@@ -430,9 +440,11 @@ class CardMarketScraper:
         )
         self._page = await self._context.new_page()
         self._page.set_default_timeout(PAGE_TIMEOUT_MS)
+        _diag("Playwright: page prete timeout=%sms", PAGE_TIMEOUT_MS)
         return self
 
     async def __aexit__(self, *args: object) -> None:
+        _diag("Playwright: fermeture navigateur")
         if self._browser:
             await self._browser.close()
         if self._cm is not None:
@@ -454,8 +466,10 @@ class CardMarketScraper:
                 raise RuntimeError("Page Cloudflare non contournée")
 
     async def scrape_url(self, url: str, etat: str = "Near Mint") -> ScrapeData:
+        _diag("scrape_url: %s etat=%s", url, etat)
         try:
             full_url = build_product_url(url, etat)
+            _diag("URL produit: %s", full_url)
             await self._goto(full_url)
             assert self._page
             prices = await self._page.evaluate(EXTRACT_PRICES_JS)
@@ -520,8 +534,16 @@ async def scrape_cardmarket_url(
     url: str, etat: str = "Near Mint", delay: float = DEFAULT_DELAY
 ) -> ScrapeData:
     """Scrape CardMarket (Playwright async, compatible FastAPI)."""
+    _diag("CardMarketScraper: ouverture navigateur url=%s etat=%s", url, etat)
     async with CardMarketScraper(delay=delay) as scraper:
-        return await scraper.scrape_url(url, etat)
+        result = await scraper.scrape_url(url, etat)
+        _diag(
+            "CardMarketScraper termine: prix=%s nom=%r error=%r",
+            result.prix_actuel,
+            result.nom,
+            result.error,
+        )
+        return result
 
 
 async def scrape_multiple(urls: list[tuple[str, str]]) -> list[ScrapeData]:

@@ -12,6 +12,14 @@ from database import get_supabase
 from scraper import EbaySoldData, scrape_cardmarket_url, scrape_ebay_sold, scrape_multiple
 
 logger = logging.getLogger(__name__)
+log = logger  # alias diagnostic
+
+
+def _diag(msg: str, *args: object) -> None:
+    """Log + print stdout (Railway affiche toujours les prints)."""
+    text = msg % args if args else msg
+    log.info(text)
+    print(text, flush=True)
 
 
 def compute_urgence(prix_actuel: Optional[float], prix_cible: float) -> str:
@@ -88,51 +96,85 @@ def _ebay_update_fields(ebay: EbaySoldData) -> dict[str, Any]:
 
 
 async def scrape_and_update_pokedex(pokedex_id: str, url: str, etat: str = "Near Mint") -> dict[str, Any]:
-    sb = get_supabase()
-    row = sb.table("pokedex").select("*").eq("id", pokedex_id).single().execute()
-    old_price = row.data.get("prix_actuel") if row.data else None
-    row_nom = row.data.get("nom") or "" if row.data else ""
-    row_ext = row.data.get("extension") or "" if row.data else ""
+    _diag("DEBUT scraping pokedex_id=%s url=%s etat=%s", pokedex_id, url, etat)
+    try:
+        sb = get_supabase()
+        _diag("Lecture Supabase id=%s", pokedex_id)
+        row = sb.table("pokedex").select("*").eq("id", pokedex_id).single().execute()
+        if not row.data:
+            _diag("ERREUR carte introuvable: %s", pokedex_id)
+            return {"success": False, "error": "Carte introuvable", "pokedex_id": pokedex_id}
 
-    data, ebay = await asyncio.gather(
-        scrape_cardmarket_url(url, etat),
-        scrape_ebay_sold(row_nom, row_ext),
-    )
-    final_nom = (data.nom or row_nom).strip()
-    final_ext = (data.extension or row_ext).strip()
-    if final_nom and (final_nom != row_nom or final_ext != row_ext) and (ebay.nb_ventes_ebay == 0 or ebay.error):
-        ebay = await scrape_ebay_sold(final_nom, final_ext)
+        old_price = row.data.get("prix_actuel")
+        row_nom = row.data.get("nom") or ""
+        row_ext = row.data.get("extension") or ""
+        _diag("Carte en base: nom=%r extension=%r", row_nom, row_ext)
 
-    if data.error and not data.prix_actuel:
-        ebay_fields = _ebay_update_fields(ebay)
-        if ebay_fields:
-            sb.table("pokedex").update(ebay_fields).eq("id", pokedex_id).execute()
-        return {"success": False, "error": data.error, "pokedex_id": pokedex_id}
+        _diag("Lancement Playwright (CardMarket)...")
+        data = await scrape_cardmarket_url(url, etat)
+        _diag(
+            "Playwright termine: prix=%s nom=%r error=%r",
+            data.prix_actuel,
+            data.nom,
+            data.error,
+        )
 
-    update = {
-        "nom": final_nom or "Carte",
-        "extension": final_ext,
-        "prix_actuel": float(data.prix_actuel) if data.prix_actuel else old_price,
-        "tendance_7j": float(data.tendance_7j) if data.tendance_7j is not None else None,
-        "image_url": data.image_url,
-        "derniere_maj": datetime.now(timezone.utc).isoformat(),
-        **_ebay_update_fields(ebay),
-    }
-    if data.prix_actuel:
-        sb.table("pokedex").update(update).eq("id", pokedex_id).execute()
-        append_historique(pokedex_id, float(data.prix_actuel), data.tendance_7j, old_price)
-    else:
-        sb.table("pokedex").update({k: v for k, v in update.items() if k != "prix_actuel"}).eq("id", pokedex_id).execute()
+        _diag("Lancement eBay...")
+        ebay = await scrape_ebay_sold(row_nom, row_ext)
+        _diag(
+            "eBay termine: moy=%s nb=%s error=%r",
+            ebay.prix_moyen_ebay,
+            ebay.nb_ventes_ebay,
+            ebay.error,
+        )
 
-    await propagate_radar_urgency()
-    return {
-        "success": True,
-        "pokedex_id": pokedex_id,
-        "nom": update["nom"],
-        "prix_actuel": update.get("prix_actuel"),
-        "prix_moyen_ebay": update.get("prix_moyen_ebay"),
-        "image_url": update.get("image_url"),
-    }
+        final_nom = (data.nom or row_nom).strip()
+        final_ext = (data.extension or row_ext).strip()
+        if final_nom and (final_nom != row_nom or final_ext != row_ext) and (
+            ebay.nb_ventes_ebay == 0 or ebay.error
+        ):
+            _diag("Retry eBay nom=%r ext=%r", final_nom, final_ext)
+            ebay = await scrape_ebay_sold(final_nom, final_ext)
+
+        if data.error and not data.prix_actuel:
+            _diag("CardMarket sans prix: %s", data.error)
+            ebay_fields = _ebay_update_fields(ebay)
+            if ebay_fields:
+                sb.table("pokedex").update(ebay_fields).eq("id", pokedex_id).execute()
+            return {"success": False, "error": data.error, "pokedex_id": pokedex_id}
+
+        update = {
+            "nom": final_nom or "Carte",
+            "extension": final_ext,
+            "prix_actuel": float(data.prix_actuel) if data.prix_actuel else old_price,
+            "tendance_7j": float(data.tendance_7j) if data.tendance_7j is not None else None,
+            "image_url": data.image_url,
+            "derniere_maj": datetime.now(timezone.utc).isoformat(),
+            **_ebay_update_fields(ebay),
+        }
+        _diag("Mise a jour Supabase id=%s", pokedex_id)
+        if data.prix_actuel:
+            sb.table("pokedex").update(update).eq("id", pokedex_id).execute()
+            append_historique(pokedex_id, float(data.prix_actuel), data.tendance_7j, old_price)
+        else:
+            sb.table("pokedex").update(
+                {k: v for k, v in update.items() if k != "prix_actuel"}
+            ).eq("id", pokedex_id).execute()
+
+        await propagate_radar_urgency()
+        _diag("FIN scraping OK id=%s", pokedex_id)
+        return {
+            "success": True,
+            "pokedex_id": pokedex_id,
+            "nom": update["nom"],
+            "prix_actuel": update.get("prix_actuel"),
+            "prix_moyen_ebay": update.get("prix_moyen_ebay"),
+            "image_url": update.get("image_url"),
+        }
+    except Exception as exc:
+        log.error("ERREUR scraping id=%s url=%s: %s", pokedex_id, url, exc, exc_info=True)
+        print(f"ERREUR scraping: {exc}", flush=True)
+        raise
 
 
 async def scrape_all_cards() -> dict[str, Any]:

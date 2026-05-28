@@ -48,7 +48,23 @@ from ebay import fetch_completed_items, get_cached_sales, sync_pokedex_sales
 
 load_dotenv()
 
-logging.basicConfig(level=logging.INFO)
+
+def _configure_logging() -> None:
+    """Logs visibles sur Railway (stdout)."""
+    import sys
+
+    fmt = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(fmt))
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    for name in ("services", "scraper", "ebay", "uvicorn", "uvicorn.error", "uvicorn.access"):
+        logging.getLogger(name).setLevel(logging.INFO)
+
+
+_configure_logging()
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -285,6 +301,7 @@ async def add_pokedex(body: PokedexCreate):
     ).execute()
     card = ins.data[0]
     pid = card["id"]
+    logger.info("[API] POST /api/pokedex (nouvelle carte) id=%s", pid)
 
     result = await scrape_and_update_pokedex(pid, url)
     if not result.get("success"):
@@ -301,6 +318,8 @@ async def add_pokedex(body: PokedexCreate):
 
 @app.post("/api/pokedex/{card_id}/scrape", response_model=ScrapeResultOut)
 async def scrape_one(card_id: UUID):
+    print(f"[API] POST /api/pokedex/{card_id}/scrape", flush=True)
+    logger.info("[API] POST /api/pokedex/%s/scrape", card_id)
     sb = get_supabase()
     row = sb.table("pokedex").select("*").eq("id", str(card_id)).single().execute()
     if not row.data:
