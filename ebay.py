@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
@@ -7,6 +8,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import httpx
 
@@ -14,10 +16,48 @@ from database import get_supabase
 
 logger = logging.getLogger(__name__)
 
-EBAY_FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
+EBAY_SEARCH_URL = "https://www.ebay.fr/sch/i.html"
+EBAY_CATEGORY_POKEMON = "183454"
 EBAY_CACHE_HOURS = 6
 EBAY_SLEEP_S = 2.0
-EBAY_API_DELAY_S = 2.0
+EBAY_AVG_SAMPLE = 10
+
+_BROWSER_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
+_FRENCH_MONTHS = {
+    "janv": 1,
+    "jan": 1,
+    "janvier": 1,
+    "févr": 2,
+    "fevr": 2,
+    "fév": 2,
+    "fev": 2,
+    "février": 2,
+    "fevrier": 2,
+    "mars": 3,
+    "avr": 4,
+    "avril": 4,
+    "mai": 5,
+    "juin": 6,
+    "juil": 7,
+    "juillet": 7,
+    "août": 8,
+    "aout": 8,
+    "sept": 9,
+    "septembre": 9,
+    "oct": 10,
+    "octobre": 10,
+    "nov": 11,
+    "novembre": 11,
+    "déc": 12,
+    "dec": 12,
+    "décembre": 12,
+    "decembre": 12,
+}
 
 # Segments CardMarket à exclure des keywords (catégories produit, pas le nom commercial)
 _EBAY_CATEGORY_PARTS = frozenset(
@@ -58,101 +98,162 @@ class EbaySale:
     url_ebay: Optional[str]
 
 
-def _first(v: Any) -> Any:
-    if isinstance(v, list):
-        return v[0] if v else None
-    return v
+def _browser_headers() -> dict[str, str]:
+    return {
+        "User-Agent": _BROWSER_UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+    }
 
 
-def _parse_iso(ts: Optional[str]) -> Optional[datetime]:
-    if not ts:
+def _strip_html(text: str) -> str:
+    cleaned = re.sub(r"<script[\s\S]*?</script>", " ", text, flags=re.I)
+    cleaned = re.sub(r"<style[\s\S]*?</style>", " ", cleaned, flags=re.I)
+    cleaned = re.sub(r"<[^>]+>", " ", cleaned)
+    cleaned = html.unescape(cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def _extract_first(html_block: str, pattern: str) -> str:
+    m = re.search(pattern, html_block, flags=re.I | re.DOTALL)
+    if not m:
+        return ""
+    return _strip_html(m.group(1))
+
+
+def _parse_price_text(text: str) -> Optional[float]:
+    if not text:
         return None
+    t = text.replace("\xa0", " ").replace("EUR", "€").strip()
+    if re.search(r"\b(?:GBP|USD|\$|£)\b", t, re.I):
+        usd_to_eur = float(os.getenv("USD_TO_EUR", "0.92"))
+        m = re.search(r"([\d\s.,]+)", t)
+        if not m:
+            return None
+        num = m.group(1).replace(" ", "").replace(",", ".")
+        try:
+            return round(float(num) * usd_to_eur, 2)
+        except ValueError:
+            return None
+    m = re.search(r"([\d\s]+[.,]\d{2})|([\d\s]+)", t)
+    if not m:
+        return None
+    num = (m.group(1) or m.group(2) or "").replace(" ", "").replace(",", ".")
+    if num.count(".") > 1:
+        parts = num.split(".")
+        num = "".join(parts[:-1]) + "." + parts[-1]
     try:
-        # ex: "2026-05-27T10:22:43.000Z"
-        if ts.endswith("Z"):
-            ts = ts.replace("Z", "+00:00")
-        return datetime.fromisoformat(ts)
-    except Exception:
-        return None
-
-
-def _parse_price(price_node: Any, usd_to_eur: float) -> Optional[float]:
-    node = _first(price_node)
-    if not isinstance(node, dict):
-        return None
-    raw = node.get("__value__") or node.get("value")
-    if raw is None:
-        return None
-    try:
-        amount = float(str(raw).replace(",", "."))
+        return round(float(num), 2)
     except ValueError:
         return None
-    currency = (node.get("@currencyId") or node.get("currencyId") or "EUR").upper()
-    if currency == "EUR":
-        return amount
-    if currency == "USD":
-        return round(amount * usd_to_eur, 2)
-    return amount
 
 
-def _extract_category(item: dict[str, Any]) -> Optional[str]:
-    cat = _first(item.get("primaryCategory"))
-    if isinstance(cat, dict):
-        return _first(cat.get("categoryName"))
+def _parse_ended_date(text: str) -> Optional[datetime]:
+    if not text:
+        return None
+    t = _strip_html(text)
+    t = re.sub(r"^(vendu|sold)\s+", "", t, flags=re.I).strip()
+
+    m = re.search(
+        r"(\d{1,2})\s+([a-zéû\.]+)\.?\s+(\d{4})",
+        t,
+        flags=re.I,
+    )
+    if m:
+        day = int(m.group(1))
+        month_key = m.group(2).lower().strip(".")
+        year = int(m.group(3))
+        month = _FRENCH_MONTHS.get(month_key)
+        if month:
+            try:
+                return datetime(year, month, day, tzinfo=timezone.utc)
+            except ValueError:
+                return None
+
+    m = re.search(r"(\d{1,2})/(\d{1,2})/(\d{4})", t)
+    if m:
+        try:
+            return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", t)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc)
+        except ValueError:
+            return None
     return None
 
 
-def _extract_url(item: dict[str, Any]) -> Optional[str]:
-    return _first(item.get("viewItemURL")) or _first(item.get("viewItemUrl")) or None
+def _parse_sold_listings_html(page_html: str) -> list[EbaySale]:
+    """Parse la page eBay « objets vendus » (s-item)."""
+    blocks = re.findall(
+        r'<li[^>]*class="[^"]*\bs-item\b[^"]*"[^>]*>(.*?)</li>',
+        page_html,
+        flags=re.I | re.DOTALL,
+    )
+    sales: list[EbaySale] = []
+    seen_titles: set[str] = set()
 
-
-def _parse_completed_items(payload: dict[str, Any], usd_to_eur: float) -> list[EbaySale]:
-    root = _first(payload.get("findCompletedItemsResponse"))
-    if not isinstance(root, dict):
-        return []
-    ack = str(_first(root.get("ack")) or "").lower()
-    if ack and ack not in ("success", "warning"):
-        return []
-    search = _first(root.get("searchResult"))
-    if not isinstance(search, dict):
-        return []
-    items = search.get("item") or []
-    if isinstance(items, dict):
-        items = [items]
-
-    out: list[EbaySale] = []
-    for item in items:
-        if not isinstance(item, dict):
+    for block in blocks:
+        title = _extract_first(
+            block,
+            r'class="[^"]*\bs-item__title\b[^"]*"[^>]*>(.*?)</(?:h3|div|span)',
+        )
+        if not title or title.lower().startswith("shop on ebay"):
             continue
-        title = str(_first(item.get("title")) or "").strip()
-        if not title:
+        title_key = title.lower()
+        if title_key in seen_titles:
             continue
-        status = _first(item.get("sellingStatus"))
-        price = None
-        if isinstance(status, dict):
-            price = _parse_price(status.get("currentPrice"), usd_to_eur)
-        end_time = _parse_iso(_first(item.get("endTime")))
-        out.append(
+        seen_titles.add(title_key)
+
+        price_raw = _extract_first(block, r'class="[^"]*\bs-item__price\b[^"]*"[^>]*>(.*?)</span>')
+        price = _parse_price_text(price_raw)
+
+        date_raw = _extract_first(
+            block,
+            r'class="[^"]*\bs-item__ended[-_]?date\b[^"]*"[^>]*>(.*?)</span>',
+        )
+        ended = _parse_ended_date(date_raw)
+
+        url = _extract_first(block, r'class="[^"]*\bs-item__link\b[^"]*"[^>]*href="([^"]+)"')
+        if url.startswith("//"):
+            url = "https:" + url
+
+        sales.append(
             EbaySale(
                 titre=title,
                 prix_vente=price,
-                date_vente=end_time,
-                categorie=_extract_category(item),
-                url_ebay=_extract_url(item),
+                date_vente=ended,
+                categorie=None,
+                url_ebay=url or None,
             )
         )
-    # tri desc (dernier vendu en premier)
-    out.sort(key=lambda s: s.date_vente or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-    return out
+
+    sales.sort(
+        key=lambda s: s.date_vente or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+    return sales
 
 
-def _ebay_app_id() -> str:
-    # Nouvelle convention demandée
-    app_id = os.getenv("EBAY_APP_ID", "").strip()
-    if app_id:
-        return app_id
-    # Compat: ancienne variable
-    return os.getenv("EBAY_API_KEY", "").strip()
+def build_search_url(
+    *,
+    keywords: Optional[str] = None,
+    category_id: str = EBAY_CATEGORY_POKEMON,
+) -> str:
+    params: dict[str, str] = {
+        "LH_Sold": "1",
+        "LH_Complete": "1",
+        "_sacat": category_id,
+    }
+    if keywords:
+        params["_nkw"] = keywords
+    return f"{EBAY_SEARCH_URL}?{urlencode(params)}"
 
 
 def _is_category_part(part: str) -> bool:
@@ -165,10 +266,7 @@ def _is_category_part(part: str) -> bool:
 
 
 def clean_nom_for_ebay(nom: str) -> str:
-    """
-    Extrait le nom commercial : retire « | Cardmarket », catégories (Box Sets…),
-    ne garde que le premier segment utile.
-    """
+    """Extrait le nom commercial (sans Cardmarket ni catégories)."""
     s = (nom or "").strip()
     s = re.sub(r"\s*\|\s*card\s*market\s*", "", s, flags=re.I).strip()
 
@@ -184,7 +282,6 @@ def clean_nom_for_ebay(nom: str) -> str:
             continue
         return part
 
-    # repli : tout avant le premier « | »
     if " | " in (nom or ""):
         return (nom or "").split(" | ", 1)[0].strip()
     return s
@@ -218,46 +315,58 @@ def _should_skip_keywords(keywords: str) -> bool:
     return not re.sub(r"\s+", "", keywords.replace("Pokemon", ""))
 
 
-def fetch_completed_items(
+def fetch_sold_items(
     *,
-    keywords: Optional[str],
-    category_id: str,
-    days: int,
-    sold_only: bool = True,
-    entries_per_page: int = 100,
+    keywords: Optional[str] = None,
+    category_id: str = EBAY_CATEGORY_POKEMON,
+    days: Optional[int] = None,
 ) -> list[EbaySale]:
-    app_id = _ebay_app_id()
-    if not app_id:
-        raise RuntimeError("EBAY_APP_ID manquant")
-
-    now = datetime.now(timezone.utc)
-    end_from = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    usd_to_eur = float(os.getenv("USD_TO_EUR", "0.92"))
-
-    params: dict[str, str] = {
-        "OPERATION-NAME": "findCompletedItems",
-        "SERVICE-VERSION": "1.13.0",
-        "SECURITY-APPNAME": app_id,
-        "RESPONSE-DATA-FORMAT": "JSON",
-        "REST-PAYLOAD": "",
-        "categoryId": category_id,
-        "GLOBAL-ID": "EBAY-FR",
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": str(entries_per_page),
-        "itemFilter(0).name": "SoldItemsOnly",
-        "itemFilter(0).value": "true" if sold_only else "false",
-        "itemFilter(1).name": "EndTimeFrom",
-        "itemFilter(1).value": end_from,
-    }
+    """Scrape la page eBay « objets vendus » (httpx, pas d'API Finding)."""
+    url = build_search_url(keywords=keywords, category_id=category_id)
     if keywords:
         logger.info(f"eBay keyword: {keywords}")
-        params["keywords"] = keywords
 
-    with httpx.Client(timeout=25.0) as client:
-        r = client.get(EBAY_FINDING_URL, params=params)
-        r.raise_for_status()
-        payload = r.json()
-    return _parse_completed_items(payload, usd_to_eur)
+    with httpx.Client(timeout=30.0, headers=_browser_headers(), follow_redirects=True) as client:
+        response = client.get(url)
+        response.raise_for_status()
+        sales = _parse_sold_listings_html(response.text)
+
+    if days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        dated = [s for s in sales if s.date_vente and s.date_vente >= cutoff]
+        if dated:
+            sales = dated
+
+    logger.info(
+        "eBay scrape: %s résultat(s) (%s)",
+        len(sales),
+        keywords or f"catégorie {category_id}",
+    )
+    return sales
+
+
+# Alias compat main.py (trending)
+fetch_completed_items = fetch_sold_items
+
+
+def compute_stats(prices: list[float]) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    if not prices:
+        return None, None, None
+    return round(sum(prices) / len(prices), 2), round(min(prices), 2), round(max(prices), 2)
+
+
+def stats_from_sales(
+    sales: list[EbaySale],
+    *,
+    sample: int = EBAY_AVG_SAMPLE,
+) -> tuple[Optional[float], Optional[float], Optional[float], int]:
+    """Moyenne/min/max sur les N dernières ventes avec prix."""
+    priced = [s.prix_vente for s in sales if s.prix_vente is not None and s.prix_vente > 0]
+    if not priced:
+        return None, None, None, 0
+    top = priced[:sample]
+    avg, mn, mx = compute_stats(top)
+    return avg, mn, mx, len(priced)
 
 
 def get_cached_sales(pokedex_id: str) -> Optional[list[dict[str, Any]]]:
@@ -310,28 +419,25 @@ def store_sales(
     return len(payload)
 
 
-def compute_stats(prices: list[float]) -> tuple[Optional[float], Optional[float], Optional[float]]:
-    if not prices:
-        return None, None, None
-    return round(sum(prices) / len(prices), 2), round(min(prices), 2), round(max(prices), 2)
-
-
 def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, Any]:
-    """Sync ventes eBay 30j pour une carte + met à jour champs eBay dans pokedex."""
+    """Sync ventes eBay via scraping HTML + met à jour champs eBay dans pokedex."""
     keywords = build_keywords(nom, extension)
     if _should_skip_keywords(keywords):
         raise RuntimeError("Nom/extension insuffisants pour eBay")
 
-    sales_30 = fetch_completed_items(keywords=keywords, category_id="183454", days=30)
-    prices_30 = [s.prix_vente for s in sales_30 if s.prix_vente]
-    avg30, min30, max30 = compute_stats(prices_30[:100])
+    all_sales = fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
+    now = datetime.now(timezone.utc)
+    cutoff_30 = now - timedelta(days=30)
+    cutoff_7 = now - timedelta(days=7)
 
-    time.sleep(EBAY_API_DELAY_S)
-    sales_7 = fetch_completed_items(keywords=keywords, category_id="183454", days=7)
-    prices_7 = [s.prix_vente for s in sales_7 if s.prix_vente]
-    avg7, min7, max7 = compute_stats(prices_7[:100])
+    sales_30 = [s for s in all_sales if not s.date_vente or s.date_vente >= cutoff_30]
+    sales_7 = [s for s in all_sales if s.date_vente and s.date_vente >= cutoff_7]
+    if not sales_30 and all_sales:
+        sales_30 = all_sales
 
-    # store ventes (on stocke la liste 30j)
+    avg30, min30, max30, nb30 = stats_from_sales(sales_30)
+    avg7, min7, max7, _ = stats_from_sales(sales_7)
+
     store_sales(
         pokedex_id=pokedex_id,
         sales=sales_30,
@@ -341,19 +447,17 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
         prix_max_7j=max7,
     )
 
-    # update pokedex
     sb = get_supabase()
     sb.table("pokedex").update(
         {
             "prix_moyen_ebay": avg30,
             "prix_min_ebay": min30,
             "prix_max_ebay": max30,
-            "nb_ventes_ebay": len(sales_30),
-            "date_maj_ebay": datetime.now(timezone.utc).isoformat(),
+            "nb_ventes_ebay": nb30,
+            "date_maj_ebay": now.isoformat(),
         }
     ).eq("id", pokedex_id).execute()
 
-    # throttling quota (sync cartes en rafale)
     time.sleep(EBAY_SLEEP_S)
 
     return {
@@ -371,7 +475,7 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
             "prix_moyen": avg30,
             "prix_min": min30,
             "prix_max": max30,
-            "nb_ventes": len(sales_30),
+            "nb_ventes": nb30,
         },
         "stats_7j": {
             "prix_moyen": avg7,
@@ -381,4 +485,3 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
         },
         "keywords": keywords,
     }
-

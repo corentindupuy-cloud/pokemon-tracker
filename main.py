@@ -44,7 +44,7 @@ from services import (
     scrape_and_update_pokedex,
 )
 from scraper import scrape_cardmarket_url
-from ebay import fetch_completed_items, get_cached_sales, sync_pokedex_sales
+from ebay import fetch_sold_items, get_cached_sales, sync_pokedex_sales
 
 load_dotenv()
 
@@ -93,11 +93,6 @@ async def scheduled_scrape_job() -> None:
 async def scheduled_ebay_sync_job() -> None:
     logger.info("Sync eBay planifié 9h00")
     try:
-        from ebay import _ebay_app_id  # local import to avoid unused in runtime
-
-        if not _ebay_app_id():
-            logger.warning("Sync eBay ignorée: EBAY_APP_ID manquant")
-            return
         sb = get_supabase()
         cards = sb.table("pokedex").select("id, nom, extension").order("nom").execute().data or []
         ok, err = 0, 0
@@ -117,7 +112,7 @@ async def scheduled_trending_snapshot_job() -> None:
     """Snapshot hebdo des tendances (lundi 7h)."""
     logger.info("Snapshot trending planifié (lundi 7h)")
     try:
-        from ebay import fetch_completed_items  # local import
+        from ebay import fetch_sold_items  # local import
 
         sb = get_supabase()
         today = date.today().isoformat()
@@ -125,7 +120,7 @@ async def scheduled_trending_snapshot_job() -> None:
         rows: list[dict] = []
         for cat_id, cat_name in categories:
             try:
-                sales = fetch_completed_items(keywords=None, category_id=cat_id, days=7)
+                sales = fetch_sold_items(keywords=None, category_id=cat_id, days=7)
             except Exception as exc:
                 logger.warning("Trending snapshot %s: %s", cat_id, exc)
                 continue
@@ -695,7 +690,7 @@ async def ebay_trending(categorie: str = Query("all", description="all|pokemon|n
         if categorie == "nba" and cat_id != "214":
             continue
         try:
-            sales = fetch_completed_items(keywords=None, category_id=cat_id, days=7)
+            sales = fetch_sold_items(keywords=None, category_id=cat_id, days=7)
         except Exception as exc:
             logger.warning("Trending eBay %s: %s", cat_id, exc)
             continue

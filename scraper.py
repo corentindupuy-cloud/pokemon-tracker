@@ -11,11 +11,11 @@ import os
 import random
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import datetime, timezone
+from typing import Optional
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
-import httpx
+from ebay import build_keywords, fetch_sold_items, stats_from_sales
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -33,12 +33,6 @@ BASE_URL = "https://www.cardmarket.com"
 POKEMON_SEARCH_URL = f"{BASE_URL}/fr/Pokemon/Products/Search"
 PAGE_TIMEOUT_MS = 45_000
 DEFAULT_DELAY = 2.5
-EBAY_FINDING_URL = "https://svcs.ebay.com/services/search/FindingService/v1"
-EBAY_CATEGORY_TCG = "183454"
-EBAY_GLOBAL_ID = "EBAY-FR"
-EBAY_SOLD_DAYS = 30
-EBAY_AVG_SAMPLE = 10
-USD_TO_EUR = float(os.getenv("USD_TO_EUR", "0.92"))
 
 CONDITION_MAP = {
     "mint": 1, "mt": 1, "neuf": 1,
@@ -248,117 +242,30 @@ def build_product_url(base_url: str, condition: str = "Near Mint") -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", new_query, ""))
 
 
-def build_ebay_keywords(nom: str, extension: str = "") -> str:
-    parts = [nom.strip(), extension.strip(), "Pokemon"]
-    return " ".join(p for p in parts if p)
-
-
-def _ebay_first(value: Any) -> Any:
-    if isinstance(value, list):
-        return value[0] if value else None
-    return value
-
-
-def _ebay_price_eur(price_node: Any) -> Optional[float]:
-    node = _ebay_first(price_node)
-    if not isinstance(node, dict):
-        return None
-    raw = node.get("__value__") or node.get("value")
-    if raw is None:
-        return None
-    try:
-        amount = float(str(raw).replace(",", "."))
-    except ValueError:
-        return None
-    currency = (node.get("@currencyId") or node.get("currencyId") or "EUR").upper()
-    if currency == "EUR":
-        return amount
-    if currency == "USD":
-        return round(amount * USD_TO_EUR, 2)
-    return amount
-
-
-def _parse_ebay_items(payload: dict[str, Any]) -> tuple[list[float], int]:
-    root = _ebay_first(payload.get("findCompletedItemsResponse"))
-    if not isinstance(root, dict):
-        return [], 0
-    ack = str(_ebay_first(root.get("ack")) or "").lower()
-    if ack and ack not in ("success", "warning"):
-        return [], 0
-    search = _ebay_first(root.get("searchResult"))
-    if not isinstance(search, dict):
-        return [], 0
-    try:
-        total = int(search.get("@count") or 0)
-    except (TypeError, ValueError):
-        total = 0
-    items = search.get("item") or []
-    if isinstance(items, dict):
-        items = [items]
-    prices: list[float] = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        status = _ebay_first(item.get("sellingStatus"))
-        if not isinstance(status, dict):
-            continue
-        price = _ebay_price_eur(status.get("currentPrice"))
-        if price is not None and price > 0:
-            prices.append(price)
-    return prices, total or len(prices)
-
-
 def _scrape_ebay_sold_sync(nom: str, extension: str = "") -> EbaySoldData:
     now = datetime.now(timezone.utc)
-    api_key = os.getenv("EBAY_APP_ID", "").strip() or os.getenv("EBAY_API_KEY", "").strip()
-    keywords = build_ebay_keywords(nom, extension)
-    if not api_key:
-        return EbaySoldData(error="EBAY_APP_ID manquant", date_maj_ebay=now)
+    keywords = build_keywords(nom, extension)
     if not keywords.replace("Pokemon", "").strip():
         return EbaySoldData(error="Nom carte requis pour eBay", date_maj_ebay=now)
-
-    end_from = (now - timedelta(days=EBAY_SOLD_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    params = {
-        "OPERATION-NAME": "findCompletedItems",
-        "SERVICE-VERSION": "1.13.0",
-        "SECURITY-APPNAME": api_key,
-        "RESPONSE-DATA-FORMAT": "JSON",
-        "REST-PAYLOAD": "",
-        "keywords": keywords,
-        "categoryId": EBAY_CATEGORY_TCG,
-        "GLOBAL-ID": EBAY_GLOBAL_ID,
-        "sortOrder": "EndTimeSoonest",
-        "paginationInput.entriesPerPage": "100",
-        "itemFilter(0).name": "SoldItemsOnly",
-        "itemFilter(0).value": "true",
-        "itemFilter(1).name": "EndTimeFrom",
-        "itemFilter(1).value": end_from,
-    }
     try:
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.get(EBAY_FINDING_URL, params=params)
-            resp.raise_for_status()
-            payload = resp.json()
+        sales = fetch_sold_items(keywords=keywords)
+        avg, mn, mx, nb = stats_from_sales(sales)
+        if nb == 0:
+            return EbaySoldData(nb_ventes_ebay=0, date_maj_ebay=now)
+        return EbaySoldData(
+            prix_moyen_ebay=avg,
+            prix_min_ebay=mn,
+            prix_max_ebay=mx,
+            nb_ventes_ebay=nb,
+            date_maj_ebay=now,
+        )
     except Exception as exc:
-        logger.warning("eBay Finding API: %s", exc)
+        logger.warning("eBay scrape: %s", exc)
         return EbaySoldData(error=str(exc), date_maj_ebay=now)
-
-    prices, total = _parse_ebay_items(payload)
-    if not prices:
-        return EbaySoldData(nb_ventes_ebay=0, date_maj_ebay=now)
-
-    sample = prices[:EBAY_AVG_SAMPLE]
-    return EbaySoldData(
-        prix_moyen_ebay=round(sum(sample) / len(sample), 2),
-        prix_min_ebay=round(min(sample), 2),
-        prix_max_ebay=round(max(sample), 2),
-        nb_ventes_ebay=total,
-        date_maj_ebay=now,
-    )
 
 
 async def scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
-    """Prix des ventes eBay terminées (30 derniers jours) via Finding API."""
+    """Prix des ventes eBay terminées via scraping HTML ebay.fr."""
     return await asyncio.to_thread(_scrape_ebay_sold_sync, nom, extension)
 
 
