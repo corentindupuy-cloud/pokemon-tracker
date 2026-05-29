@@ -98,7 +98,7 @@ async def scheduled_ebay_sync_job() -> None:
         ok, err = 0, 0
         for c in cards:
             try:
-                sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
+                await sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
                 ok += 1
             except Exception as exc:  # noqa: BLE001
                 err += 1
@@ -120,7 +120,7 @@ async def scheduled_trending_snapshot_job() -> None:
         rows: list[dict] = []
         for cat_id, cat_name in categories:
             try:
-                sales = fetch_sold_items(keywords=None, category_id=cat_id, days=7)
+                sales = await fetch_sold_items(keywords=None, category_id=cat_id, days=7)
             except Exception as exc:
                 logger.warning("Trending snapshot %s: %s", cat_id, exc)
                 continue
@@ -644,7 +644,9 @@ async def ebay_sold(pokedex_id: UUID):
     card = sb.table("pokedex").select("id, nom, extension").eq("id", str(pokedex_id)).single().execute()
     if not card.data:
         raise HTTPException(404, "Carte Pokédex introuvable")
-    result = sync_pokedex_sales(str(pokedex_id), card.data.get("nom") or "", card.data.get("extension") or "")
+    result = await sync_pokedex_sales(
+        str(pokedex_id), card.data.get("nom") or "", card.data.get("extension") or ""
+    )
     return {"cached": False, **result}
 
 
@@ -656,7 +658,7 @@ async def ebay_sync():
     ok, errors = 0, []
     for c in cards:
         try:
-            sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
+            await sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
             ok += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"id": str(c["id"]), "nom": c.get("nom"), "error": str(exc)})
@@ -690,7 +692,7 @@ async def ebay_trending(categorie: str = Query("all", description="all|pokemon|n
         if categorie == "nba" and cat_id != "214":
             continue
         try:
-            sales = fetch_sold_items(keywords=None, category_id=cat_id, days=7)
+            sales = await fetch_sold_items(keywords=None, category_id=cat_id, days=7)
         except Exception as exc:
             logger.warning("Trending eBay %s: %s", cat_id, exc)
             continue

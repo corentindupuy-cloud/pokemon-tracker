@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import os
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -22,11 +22,25 @@ EBAY_CACHE_HOURS = 6
 EBAY_SLEEP_S = 2.0
 EBAY_AVG_SAMPLE = 10
 
-_BROWSER_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
+_BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "fr-FR,fr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Cache-Control": "max-age=0",
+    "DNT": "1",
+}
 
 _FRENCH_MONTHS = {
     "janv": 1,
@@ -99,14 +113,7 @@ class EbaySale:
 
 
 def _browser_headers() -> dict[str, str]:
-    return {
-        "User-Agent": _BROWSER_UA,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-    }
+    return dict(_BROWSER_HEADERS)
 
 
 def _strip_html(text: str) -> str:
@@ -315,19 +322,23 @@ def _should_skip_keywords(keywords: str) -> bool:
     return not re.sub(r"\s+", "", keywords.replace("Pokemon", ""))
 
 
-def fetch_sold_items(
+async def fetch_sold_items(
     *,
     keywords: Optional[str] = None,
     category_id: str = EBAY_CATEGORY_POKEMON,
     days: Optional[int] = None,
 ) -> list[EbaySale]:
-    """Scrape la page eBay « objets vendus » (httpx, pas d'API Finding)."""
+    """Scrape la page eBay « objets vendus » (httpx async, pas d'API Finding)."""
     url = build_search_url(keywords=keywords, category_id=category_id)
     if keywords:
         logger.info(f"eBay keyword: {keywords}")
 
-    with httpx.Client(timeout=30.0, headers=_browser_headers(), follow_redirects=True) as client:
-        response = client.get(url)
+    async with httpx.AsyncClient(
+        timeout=30.0,
+        headers=_browser_headers(),
+        follow_redirects=True,
+    ) as client:
+        response = await client.get(url)
         response.raise_for_status()
         sales = _parse_sold_listings_html(response.text)
 
@@ -419,13 +430,13 @@ def store_sales(
     return len(payload)
 
 
-def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, Any]:
+async def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, Any]:
     """Sync ventes eBay via scraping HTML + met à jour champs eBay dans pokedex."""
     keywords = build_keywords(nom, extension)
     if _should_skip_keywords(keywords):
         raise RuntimeError("Nom/extension insuffisants pour eBay")
 
-    all_sales = fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
+    all_sales = await fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
     now = datetime.now(timezone.utc)
     cutoff_30 = now - timedelta(days=30)
     cutoff_7 = now - timedelta(days=7)
@@ -458,7 +469,7 @@ def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, A
         }
     ).eq("id", pokedex_id).execute()
 
-    time.sleep(EBAY_SLEEP_S)
+    await asyncio.sleep(EBAY_SLEEP_S)
 
     return {
         "sales": [

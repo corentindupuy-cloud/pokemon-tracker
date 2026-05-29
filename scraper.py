@@ -242,13 +242,13 @@ def build_product_url(base_url: str, condition: str = "Near Mint") -> str:
     return urlunparse((parsed.scheme, parsed.netloc, path, "", new_query, ""))
 
 
-def _scrape_ebay_sold_sync(nom: str, extension: str = "") -> EbaySoldData:
+async def _scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
     now = datetime.now(timezone.utc)
     keywords = build_keywords(nom, extension)
     if not keywords.replace("Pokemon", "").strip():
         return EbaySoldData(error="Nom carte requis pour eBay", date_maj_ebay=now)
     try:
-        sales = fetch_sold_items(keywords=keywords)
+        sales = await fetch_sold_items(keywords=keywords)
         avg, mn, mx, nb = stats_from_sales(sales)
         if nb == 0:
             return EbaySoldData(nb_ventes_ebay=0, date_maj_ebay=now)
@@ -266,7 +266,7 @@ def _scrape_ebay_sold_sync(nom: str, extension: str = "") -> EbaySoldData:
 
 async def scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
     """Prix des ventes eBay terminées via scraping HTML ebay.fr."""
-    return await asyncio.to_thread(_scrape_ebay_sold_sync, nom, extension)
+    return await _scrape_ebay_sold(nom, extension)
 
 
 async def is_cloudflare_page(page: Page) -> bool:
