@@ -210,7 +210,7 @@ async def index():
                 "Pragma": "no-cache",
             },
         )
-    return HTMLResponse("<h1>Pokémon Tracker</h1><p>static/index.html manquant</p>")
+    return HTMLResponse("<h1>Hajime</h1><p>static/index.html manquant</p>")
 
 
 def _proxy_headers_for_url(url: str) -> dict[str, str]:

@@ -462,8 +462,8 @@ function renderCharts(data) {
     maintainAspectRatio: true,
     plugins: { legend: { display: false } },
     scales: {
-      x: { ticks: { color: "#8b9cb3", maxRotation: 45 }, grid: { color: "#2d3f56" } },
-      y: { ticks: { color: "#8b9cb3" }, grid: { color: "#2d3f56" } },
+      x: { ticks: { color: "#9b95ad", maxRotation: 45 }, grid: { color: "#3d3d5c" } },
+      y: { ticks: { color: "#9b95ad" }, grid: { color: "#3d3d5c" } },
     },
   };
 
@@ -477,8 +477,8 @@ function renderCharts(data) {
       datasets: [{
         label: "Valeur stock (€)",
         data: data.valeur_stock || [],
-        borderColor: "#3b82f6",
-        backgroundColor: "rgba(59, 130, 246, 0.15)",
+        borderColor: "#E8436A",
+        backgroundColor: "rgba(232, 67, 106, 0.15)",
         fill: true,
         tension: 0.3,
       }],
@@ -493,8 +493,8 @@ function renderCharts(data) {
       datasets: [{
         label: "CA (€)",
         data: data.chiffre_affaires || [],
-        backgroundColor: "rgba(255, 203, 5, 0.7)",
-        borderColor: "#ffcb05",
+        backgroundColor: "rgba(255, 183, 197, 0.7)",
+        borderColor: "#FFB7C5",
         borderWidth: 1,
       }],
     },

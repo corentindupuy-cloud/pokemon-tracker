@@ -3,13 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pokémon Tracker</title>
+  <title>Hajime — TCG Tracker</title>
+  <link rel="icon" type="image/png" href="/static/images/hajime-logo.png?v={{STATIC_VERSION}}" />
   <link rel="stylesheet" href="/static/style.css?v={{STATIC_VERSION}}" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <header>
-    <h1>Pokémon Tracker</h1>
+    <a href="/" class="brand" aria-label="Hajime — TCG Tracker">
+      <img
+        src="/static/images/hajime-logo.png?v={{STATIC_VERSION}}"
+        alt="Hajime"
+        class="brand-logo"
+        height="48"
+      />
+    </a>
     <nav class="tabs" id="tabs">
       <button data-tab="dashboard" class="active">Dashboard</button>
       <button data-tab="pokedex">Pokédex</button>

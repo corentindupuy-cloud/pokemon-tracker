@@ -1,12 +1,14 @@
 :root {
-  --bg: #0f1419;
-  --surface: #1a2332;
-  --surface2: #243044;
-  --border: #2d3f56;
-  --text: #e8edf4;
-  --muted: #8b9cb3;
-  --accent: #ffcb05;
-  --accent2: #3b82f6;
+  --bg: #0d0d1a;
+  --surface: #1a1a2e;
+  --surface2: #252540;
+  --border: #3d3d5c;
+  --text: #f0eef4;
+  --muted: #9b95ad;
+  --accent: #e8436a;
+  --accent2: #ffb7c5;
+  --sakura: #ffb7c5;
+  --cherry: #e8436a;
   --green: #22c55e;
   --yellow: #eab308;
   --red: #ef4444;
@@ -25,7 +27,7 @@ body {
 }
 
 header {
-  background: linear-gradient(135deg, #1a2332 0%, #0f1419 100%);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--bg) 100%);
   border-bottom: 2px solid var(--accent);
   padding: 1rem 1.5rem;
   display: flex;
@@ -35,7 +37,18 @@ header {
   gap: 1rem;
 }
 
-header h1 { font-size: 1.4rem; color: var(--accent); }
+.brand {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  flex-shrink: 0;
+}
+
+.brand-logo {
+  height: 48px;
+  width: auto;
+  display: block;
+}
 
 nav.tabs {
   display: flex;
@@ -81,12 +94,12 @@ nav.tabs {
   font-weight: 600;
 }
 .segmented .seg.active {
-  background: var(--accent2);
+  background: var(--accent);
   color: #fff;
 }
 
 .link {
-  color: var(--accent2);
+  color: var(--sakura);
   text-decoration: none;
   font-weight: 700;
 }
@@ -112,7 +125,7 @@ nav.tabs button {
 
 nav.tabs button.active {
   background: var(--accent);
-  color: #111;
+  color: #fff;
   border-color: var(--accent);
   font-weight: 600;
 }
@@ -141,8 +154,8 @@ main { padding: 1.25rem 1.5rem; max-width: 1200px; margin: 0 auto; }
 .kpi-card .value.kpi-pos { color: var(--green); }
 .kpi-card .value.kpi-neg { color: var(--red); }
 .kpi-card-highlight {
-  border-color: var(--accent2);
-  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.25);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(232, 67, 106, 0.3);
 }
 
 .charts-grid {
@@ -206,7 +219,7 @@ main { padding: 1.25rem 1.5rem; max-width: 1200px; margin: 0 auto; }
   margin: 0;
 }
 .qty-input:focus {
-  outline: 2px solid var(--accent2);
+  outline: 2px solid var(--accent);
   border-radius: 4px;
 }
 .btn-qty {
@@ -223,9 +236,9 @@ main { padding: 1.25rem 1.5rem; max-width: 1200px; margin: 0 auto; }
   padding: 0;
 }
 .btn-qty:hover {
-  background: var(--accent2);
+  background: var(--accent);
   color: #fff;
-  border-color: var(--accent2);
+  border-color: var(--accent);
 }
 
 .toolbar,
@@ -258,7 +271,7 @@ input, select, textarea {
 input[type="url"] { min-width: 280px; flex: 1; }
 
 button.btn {
-  background: var(--accent2);
+  background: var(--accent);
   color: #fff;
   border: none;
   padding: 0.55rem 1rem;
@@ -269,7 +282,7 @@ button.btn {
 }
 
 button.btn:hover { filter: brightness(1.1); }
-button.btn-accent { background: var(--accent); color: #111; }
+button.btn-accent { background: var(--sakura); color: var(--surface); }
 button.btn-ghost { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 button.btn-delete {
   background: transparent;
@@ -336,7 +349,7 @@ th.actions-col-h {
 }
 
 tr:hover .actions-col {
-  background: #1e2a3d;
+  background: #22223a;
 }
 
 .pokedex-actions {
@@ -403,7 +416,7 @@ tr:hover .actions-col {
 }
 
 .btn-icon-sync {
-  background: rgba(37, 99, 235, 0.55);
+  background: rgba(232, 67, 106, 0.55);
 }
 
 .btn-icon-sync.is-loading .icon {
@@ -458,7 +471,7 @@ tr:hover td { background: rgba(59, 130, 246, 0.08); }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #2a3548;
+  background: var(--surface2);
   border-radius: 6px;
   font-size: 1.5rem;
   cursor: default;
