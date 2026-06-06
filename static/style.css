@@ -29,12 +29,13 @@ body {
 header {
   background: linear-gradient(135deg, var(--surface) 0%, var(--bg) 100%);
   border-bottom: 2px solid var(--accent);
-  padding: 1rem 1.5rem;
+  padding: 0.65rem 1.5rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 1rem;
+  min-height: 6.75rem;
 }
 
 .brand {
@@ -44,10 +45,32 @@ header {
   flex-shrink: 0;
 }
 
+.brand-logo-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.65rem;
+  border-radius: 14px;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 183, 197, 0.22) 0%,
+    rgba(232, 67, 106, 0.12) 100%
+  );
+  border: 1px solid rgba(255, 183, 197, 0.35);
+  box-shadow:
+    0 0 24px rgba(232, 67, 106, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
 .brand-logo {
-  height: 48px;
+  height: 110px;
   width: auto;
+  max-width: min(280px, 55vw);
   display: block;
+  object-fit: contain;
+  filter:
+    drop-shadow(0 0 10px rgba(255, 183, 197, 0.55))
+    drop-shadow(0 4px 14px rgba(0, 0, 0, 0.45));
 }
 
 nav.tabs {

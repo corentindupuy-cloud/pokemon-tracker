@@ -74,7 +74,7 @@ scheduler = AsyncIOScheduler()
 def _static_asset_version() -> str:
     """Version cache-bust basée sur la date de modif des assets (évite JS/CSS obsolètes)."""
     mtimes: list[float] = []
-    for name in ("app.js", "style.css", "index.html"):
+    for name in ("app.js", "style.css", "index.html", "images/hajime-logo.png"):
         path = STATIC_DIR / name
         if path.is_file():
             mtimes.append(path.stat().st_mtime)
