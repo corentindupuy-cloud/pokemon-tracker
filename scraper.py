@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import parse_qs, quote_plus, urlencode, urlparse, urlunparse
 
-from ebay import build_keywords, fetch_sold_items, stats_from_sales
+from ebay import fetch_sold_items, resolve_ebay_search, stats_from_sales
 from playwright.async_api import Page, TimeoutError as PlaywrightTimeout
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
@@ -230,25 +230,56 @@ def condition_to_min(condition: str) -> int:
     return CONDITION_MAP.get(normalize(condition), 2)
 
 
-def build_product_url(base_url: str, condition: str = "Near Mint") -> str:
+_LANGUE_CARDMARKET: dict[str, str] = {
+    "FR": "7",
+    "EN": "1",
+    "JP": "2",
+    "DE": "3",
+    "ES": "4",
+    "IT": "5",
+}
+
+
+def build_product_url(
+    base_url: str,
+    condition: str = "Near Mint",
+    langue: str = "FR",
+) -> str:
     parsed = urlparse(base_url.strip())
     if "cardmarket.com" not in parsed.netloc:
         raise ValueError("URL CardMarket invalide")
     path = parsed.path.rstrip("/")
     query = parse_qs(parsed.query)
-    query["language"] = ["7"]
+    lang_code = _LANGUE_CARDMARKET.get((langue or "FR").upper(), "7")
+    query["language"] = [lang_code]
     query["minCondition"] = [str(condition_to_min(condition))]
     new_query = urlencode({k: v[0] for k, v in query.items()})
     return urlunparse((parsed.scheme, parsed.netloc, path, "", new_query, ""))
 
 
-async def _scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
+async def _scrape_ebay_sold(
+    nom: str,
+    extension: str = "",
+    *,
+    langue: str = "FR",
+    ebay_keyword: Optional[str] = None,
+    ebay_url: Optional[str] = None,
+) -> EbaySoldData:
     now = datetime.now(timezone.utc)
-    keywords = build_keywords(nom, extension)
-    if not keywords.replace("Pokemon", "").strip():
+    plan = resolve_ebay_search(
+        nom,
+        extension,
+        langue=langue,
+        ebay_keyword=ebay_keyword,
+        ebay_url=ebay_url,
+    )
+    if not plan.search_url and not (plan.keywords or "").replace("Pokemon", "").strip():
         return EbaySoldData(error="Nom carte requis pour eBay", date_maj_ebay=now)
     try:
-        sales = await fetch_sold_items(keywords=keywords)
+        if plan.search_url:
+            sales = await fetch_sold_items(search_url=plan.search_url)
+        else:
+            sales = await fetch_sold_items(keywords=plan.keywords)
         avg, mn, mx, nb = stats_from_sales(sales)
         if nb == 0:
             return EbaySoldData(nb_ventes_ebay=0, date_maj_ebay=now)
@@ -264,9 +295,22 @@ async def _scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
         return EbaySoldData(error=str(exc), date_maj_ebay=now)
 
 
-async def scrape_ebay_sold(nom: str, extension: str = "") -> EbaySoldData:
+async def scrape_ebay_sold(
+    nom: str,
+    extension: str = "",
+    *,
+    langue: str = "FR",
+    ebay_keyword: Optional[str] = None,
+    ebay_url: Optional[str] = None,
+) -> EbaySoldData:
     """Prix des ventes eBay terminées via scraping HTML ebay.fr."""
-    return await _scrape_ebay_sold(nom, extension)
+    return await _scrape_ebay_sold(
+        nom,
+        extension,
+        langue=langue,
+        ebay_keyword=ebay_keyword,
+        ebay_url=ebay_url,
+    )
 
 
 async def is_cloudflare_page(page: Page) -> bool:
@@ -372,10 +416,15 @@ class CardMarketScraper:
             if await is_cloudflare_page(self._page):
                 raise RuntimeError("Page Cloudflare non contournée")
 
-    async def scrape_url(self, url: str, etat: str = "Near Mint") -> ScrapeData:
-        _diag("scrape_url: %s etat=%s", url, etat)
+    async def scrape_url(
+        self,
+        url: str,
+        etat: str = "Near Mint",
+        langue: str = "FR",
+    ) -> ScrapeData:
+        _diag("scrape_url: %s etat=%s langue=%s", url, etat, langue)
         try:
-            full_url = build_product_url(url, etat)
+            full_url = build_product_url(url, etat, langue)
             _diag("URL produit: %s", full_url)
             await self._goto(full_url)
             assert self._page
@@ -438,12 +487,15 @@ class CardMarketScraper:
 
 
 async def scrape_cardmarket_url(
-    url: str, etat: str = "Near Mint", delay: float = DEFAULT_DELAY
+    url: str,
+    etat: str = "Near Mint",
+    langue: str = "FR",
+    delay: float = DEFAULT_DELAY,
 ) -> ScrapeData:
     """Scrape CardMarket (Playwright async, compatible FastAPI)."""
-    _diag("CardMarketScraper: ouverture navigateur url=%s etat=%s", url, etat)
+    _diag("CardMarketScraper: ouverture navigateur url=%s etat=%s langue=%s", url, etat, langue)
     async with CardMarketScraper(delay=delay) as scraper:
-        result = await scraper.scrape_url(url, etat)
+        result = await scraper.scrape_url(url, etat, langue)
         _diag(
             "CardMarketScraper termine: prix=%s nom=%r error=%r",
             result.prix_actuel,
@@ -453,10 +505,14 @@ async def scrape_cardmarket_url(
         return result
 
 
-async def scrape_multiple(urls: list[tuple[str, str]]) -> list[ScrapeData]:
-    """Scrape séquentiel (un navigateur, API async)."""
+async def scrape_multiple(
+    urls: list[tuple[str, str] | tuple[str, str, str]],
+) -> list[ScrapeData]:
+    """Scrape séquentiel (un navigateur, API async). Tuple: (url, etat) ou (url, etat, langue)."""
     results: list[ScrapeData] = []
     async with CardMarketScraper() as scraper:
-        for url, etat in urls:
-            results.append(await scraper.scrape_url(url, etat))
+        for item in urls:
+            url, etat = item[0], item[1]
+            langue = item[2] if len(item) > 2 else "FR"
+            results.append(await scraper.scrape_url(url, etat, langue))
     return results

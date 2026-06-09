@@ -108,10 +108,19 @@ async def scrape_and_update_pokedex(pokedex_id: str, url: str, etat: str = "Near
         old_price = row.data.get("prix_actuel")
         row_nom = row.data.get("nom") or ""
         row_ext = row.data.get("extension") or ""
-        _diag("Carte en base: nom=%r extension=%r", row_nom, row_ext)
+        row_langue = row.data.get("langue") or "FR"
+        row_ebay_kw = row.data.get("ebay_keyword")
+        row_ebay_url = row.data.get("ebay_url")
+        _diag(
+            "Carte en base: nom=%r extension=%r langue=%s ebay_url=%s",
+            row_nom,
+            row_ext,
+            row_langue,
+            bool(row_ebay_url),
+        )
 
         _diag("Lancement Playwright (CardMarket)...")
-        data = await scrape_cardmarket_url(url, etat)
+        data = await scrape_cardmarket_url(url, etat, langue=row_langue)
         _diag(
             "Playwright termine: prix=%s nom=%r error=%r",
             data.prix_actuel,
@@ -120,7 +129,13 @@ async def scrape_and_update_pokedex(pokedex_id: str, url: str, etat: str = "Near
         )
 
         _diag("Lancement eBay...")
-        ebay = await scrape_ebay_sold(row_nom, row_ext)
+        ebay = await scrape_ebay_sold(
+            row_nom,
+            row_ext,
+            langue=row_langue,
+            ebay_keyword=row_ebay_kw,
+            ebay_url=row_ebay_url,
+        )
         _diag(
             "eBay termine: moy=%s nb=%s error=%r",
             ebay.prix_moyen_ebay,
@@ -134,7 +149,13 @@ async def scrape_and_update_pokedex(pokedex_id: str, url: str, etat: str = "Near
             ebay.nb_ventes_ebay == 0 or ebay.error
         ):
             _diag("Retry eBay nom=%r ext=%r", final_nom, final_ext)
-            ebay = await scrape_ebay_sold(final_nom, final_ext)
+            ebay = await scrape_ebay_sold(
+                final_nom,
+                final_ext,
+                langue=row_langue,
+                ebay_keyword=row_ebay_kw,
+                ebay_url=row_ebay_url,
+            )
 
         if data.error and not data.prix_actuel:
             _diag("CardMarket sans prix: %s", data.error)
@@ -179,17 +200,35 @@ async def scrape_and_update_pokedex(pokedex_id: str, url: str, etat: str = "Near
 
 async def scrape_all_cards() -> dict[str, Any]:
     sb = get_supabase()
-    cards = sb.table("pokedex").select("id, nom, extension, url_cardmarket, etat, prix_actuel").execute().data or []
+    cards = (
+        sb.table("pokedex")
+        .select(
+            "id, nom, extension, url_cardmarket, etat, prix_actuel, "
+            "langue, ebay_keyword, ebay_url"
+        )
+        .execute()
+        .data
+        or []
+    )
     if not cards:
         return {"success": True, "scraped": 0, "errors": []}
 
-    urls = [(c["url_cardmarket"], c.get("etat") or "Near Mint") for c in cards]
+    urls = [
+        (c["url_cardmarket"], c.get("etat") or "Near Mint", c.get("langue") or "FR")
+        for c in cards
+    ]
     results = await scrape_multiple(urls)
     ok, errors = 0, []
     for card, data in zip(cards, results):
         nom = (data.nom or card.get("nom") or "").strip()
         ext = (data.extension or card.get("extension") or "").strip()
-        ebay = await scrape_ebay_sold(nom, ext)
+        ebay = await scrape_ebay_sold(
+            nom,
+            ext,
+            langue=card.get("langue") or "FR",
+            ebay_keyword=card.get("ebay_keyword"),
+            ebay_url=card.get("ebay_url"),
+        )
         if data.error and not data.prix_actuel:
             ebay_fields = _ebay_update_fields(ebay)
             if ebay_fields:

@@ -49,12 +49,35 @@
 
     <!-- Pokédex -->
     <section id="panel-pokedex" class="panel">
-      <div class="toolbar">
-        <input type="url" id="url-input" placeholder="URL CardMarket (https://www.cardmarket.com/fr/Pokemon/...)" />
-        <button class="btn btn-accent" id="btn-add-url">Ajouter</button>
-        <button class="btn" id="btn-scrape-all">Scraper tout</button>
+      <form class="add-form pokedex-add-form" id="form-pokedex-add">
+        <input
+          type="url"
+          id="url-input"
+          required
+          placeholder="URL CardMarket (obligatoire)"
+        />
+        <select id="langue-select" title="Langue">
+          <option value="FR" selected>🇫🇷 FR</option>
+          <option value="EN">🇬🇧 EN</option>
+          <option value="JP">🇯🇵 JP</option>
+          <option value="IT">🇮🇹 IT</option>
+          <option value="DE">🇩🇪 DE</option>
+          <option value="ES">🇪🇸 ES</option>
+        </select>
+        <input
+          type="url"
+          id="ebay-url-input"
+          placeholder="URL eBay sold (optionnel)"
+        />
+        <input
+          type="text"
+          id="ebay-keyword-input"
+          placeholder="Keyword eBay (optionnel)"
+        />
+        <button type="submit" class="btn btn-accent">Ajouter</button>
+        <button type="button" class="btn" id="btn-scrape-all">Scraper tout</button>
         <div class="loader" id="pokedex-loader"><span>Scraping en cours…</span></div>
-      </div>
+      </form>
       <div class="table-scroll">
         <table class="pokedex-table">
           <thead>

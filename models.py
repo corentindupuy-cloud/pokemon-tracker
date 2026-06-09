@@ -17,8 +17,14 @@ class PokedexBase(BaseModel):
     tendance_7j: Optional[float] = None
 
 
+LANGUES_POKEDEX = frozenset({"FR", "EN", "JP", "IT", "DE", "ES"})
+
+
 class PokedexCreate(BaseModel):
     url_cardmarket: str
+    langue: str = "FR"
+    ebay_keyword: Optional[str] = None
+    ebay_url: Optional[str] = None
 
 
 class PokedexOut(PokedexBase):
@@ -28,6 +34,9 @@ class PokedexOut(PokedexBase):
     prix_max_ebay: Optional[float] = None
     nb_ventes_ebay: Optional[int] = None
     date_maj_ebay: Optional[datetime] = None
+    langue: str = "FR"
+    ebay_keyword: Optional[str] = None
+    ebay_url: Optional[str] = None
     derniere_maj: Optional[datetime] = None
     created_at: Optional[datetime] = None
 

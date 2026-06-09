@@ -17,6 +17,9 @@ create table if not exists pokedex (
     prix_max_ebay float,
     nb_ventes_ebay int default 0,
     date_maj_ebay timestamptz,
+    langue text default 'FR',
+    ebay_keyword text,
+    ebay_url text,
     derniere_maj timestamptz,
     created_at timestamptz default now()
 );

@@ -100,6 +100,21 @@ function thumbFallback(img) {
  * @param {object} row — doit contenir nom, image_url, extension (optionnels)
  * @param {string} [actionsHtml] — boutons Sync / supprimer (Pokédex)
  */
+const LANGUE_BADGES = {
+  FR: { flag: "🇫🇷", label: "FR", cls: "lang-fr" },
+  EN: { flag: "🇬🇧", label: "EN", cls: "lang-en" },
+  JP: { flag: "🇯🇵", label: "JP", cls: "lang-jp" },
+  IT: { flag: "🇮🇹", label: "IT", cls: "lang-it" },
+  DE: { flag: "🇩🇪", label: "DE", cls: "lang-de" },
+  ES: { flag: "🇪🇸", label: "ES", cls: "lang-es" },
+};
+
+function langueBadge(langue) {
+  const code = (langue || "FR").toUpperCase();
+  const meta = LANGUE_BADGES[code] || LANGUE_BADGES.FR;
+  return `<span class="lang-badge ${meta.cls}" title="Langue ${meta.label}">${meta.flag} ${meta.label}</span>`;
+}
+
 function cardCell(row, actionsHtml = "") {
   const name = displayNom(row?.nom);
   const imageUrl = row?.image_url || null;
@@ -108,13 +123,14 @@ function cardCell(row, actionsHtml = "") {
   const extHtml = row?.extension
     ? `<br><small style="color:var(--muted)">${escapeAttr(row.extension)}</small>`
     : "";
+  const langHtml = `<div class="card-lang">${langueBadge(row?.langue)}</div>`;
   const actions = actionsHtml
     ? `<div class="card-actions">${actionsHtml}</div>`
     : "";
   return (
     `<div class="card-cell">` +
     `${thumb}` +
-    `<div class="card-cell-info"><strong>${escapeAttr(name)}</strong>${extHtml}</div>` +
+    `<div class="card-cell-info">${langHtml}<strong>${escapeAttr(name)}</strong>${extHtml}</div>` +
     `${actions}` +
     `</div>`
   );
@@ -168,8 +184,22 @@ function fmtEur(v) {
   return `${Number(v).toFixed(2)} €`;
 }
 
+function ebayLinkIcon(url) {
+  if (!url) return "";
+  return (
+    `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" ` +
+    `class="ebay-link" title="Recherche eBay personnalisée" aria-label="Ouvrir eBay">` +
+    `<svg class="ebay-link-icon" viewBox="0 0 24 24" aria-hidden="true">` +
+    `<path fill="currentColor" d="M4 6h16v2H4V6zm0 5h10v2H4v-2zm0 5h16v2H4v-2z"/>` +
+    `</svg></a>`
+  );
+}
+
 function ebayCell(row) {
-  if (row.prix_moyen_ebay == null) return "—";
+  const icon = ebayLinkIcon(row.ebay_url);
+  if (row.prix_moyen_ebay == null) {
+    return icon ? `<span class="ebay-cell">${icon}<span class="muted">—</span></span>` : "—";
+  }
   const cm = row.prix_actuel;
   let tag = "=";
   let cls = "ebay-neutral";
@@ -185,12 +215,20 @@ function ebayCell(row) {
       }
     }
   }
+  const nb = row.nb_ventes_ebay ?? 0;
   const tip = [
     `Min: ${fmtEur(row.prix_min_ebay)}`,
     `Max: ${fmtEur(row.prix_max_ebay)}`,
-    `${row.nb_ventes_ebay ?? 0} vente(s) sur 30j`,
-  ].join(" · ");
-  return `<span class="ebay-price ${cls}" title="${escapeAttr(tip)}"><span class="ebay-tag">${tag}</span> ${fmtEur(row.prix_moyen_ebay)}</span>`;
+    `${nb} vente(s) sur 30j`,
+    row.ebay_keyword ? `Keyword: ${row.ebay_keyword}` : null,
+  ].filter(Boolean).join(" · ");
+  return (
+    `<span class="ebay-cell">` +
+    `${icon}` +
+    `<span class="ebay-price ${cls}" title="${escapeAttr(tip)}">` +
+    `<span class="ebay-tag">${tag}</span> ${fmtEur(row.prix_moyen_ebay)} ` +
+    `<small class="ebay-nb">(${nb})</small></span></span>`
+  );
 }
 
 function pct(n) {
@@ -551,18 +589,32 @@ async function loadPokedex() {
   });
 }
 
-$("#btn-add-url").onclick = async () => {
+$("#form-pokedex-add").onsubmit = async (e) => {
+  e.preventDefault();
   const url = $("#url-input").value.trim();
-  if (!url) return alert("URL requise");
+  if (!url) return alert("URL CardMarket requise");
+  const langue = $("#langue-select").value;
+  const ebay_url = $("#ebay-url-input").value.trim();
+  const ebay_keyword = $("#ebay-keyword-input").value.trim();
   const loader = $("#pokedex-loader");
   loader.classList.add("show");
   try {
-    await api("/api/pokedex", { method: "POST", body: JSON.stringify({ url_cardmarket: url }) });
+    await api("/api/pokedex", {
+      method: "POST",
+      body: JSON.stringify({
+        url_cardmarket: url,
+        langue,
+        ebay_url: ebay_url || null,
+        ebay_keyword: ebay_keyword || null,
+      }),
+    });
     $("#url-input").value = "";
+    $("#ebay-url-input").value = "";
+    $("#ebay-keyword-input").value = "";
     await loadPokedex();
     await loadPokedexOptions();
-  } catch (e) {
-    alert(e.message);
+  } catch (err) {
+    alert(err.message);
   } finally {
     loader.classList.remove("show");
   }

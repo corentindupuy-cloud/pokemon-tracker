@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from database import get_supabase
 from models import (
+    LANGUES_POKEDEX,
     DashboardKPIs,
     PokedexCreate,
     PokedexOut,
@@ -94,11 +95,25 @@ async def scheduled_ebay_sync_job() -> None:
     logger.info("Sync eBay planifié 9h00")
     try:
         sb = get_supabase()
-        cards = sb.table("pokedex").select("id, nom, extension").order("nom").execute().data or []
+        cards = (
+            sb.table("pokedex")
+            .select("id, nom, extension, langue, ebay_keyword, ebay_url")
+            .order("nom")
+            .execute()
+            .data
+            or []
+        )
         ok, err = 0, 0
         for c in cards:
             try:
-                await sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
+                await sync_pokedex_sales(
+                    str(c["id"]),
+                    c.get("nom") or "",
+                    c.get("extension") or "",
+                    langue=c.get("langue") or "FR",
+                    ebay_keyword=c.get("ebay_keyword"),
+                    ebay_url=c.get("ebay_url"),
+                )
                 ok += 1
             except Exception as exc:  # noqa: BLE001
                 err += 1
@@ -309,8 +324,24 @@ async def add_pokedex(body: PokedexCreate):
     if existing.data:
         raise HTTPException(409, "Cette carte existe déjà")
 
+    langue = (body.langue or "FR").upper()
+    if langue not in LANGUES_POKEDEX:
+        raise HTTPException(400, f"Langue invalide (attendu: {', '.join(sorted(LANGUES_POKEDEX))})")
+
+    ebay_kw = (body.ebay_keyword or "").strip() or None
+    ebay_url = (body.ebay_url or "").strip() or None
+    if ebay_url and "ebay." not in ebay_url.lower():
+        raise HTTPException(400, "URL eBay invalide")
+
     ins = sb.table("pokedex").insert(
-        {"url_cardmarket": url.split("?")[0], "nom": "Chargement…", "etat": "Near Mint"}
+        {
+            "url_cardmarket": url.split("?")[0],
+            "nom": "Chargement…",
+            "etat": "Near Mint",
+            "langue": langue,
+            "ebay_keyword": ebay_kw,
+            "ebay_url": ebay_url,
+        }
     ).execute()
     card = ins.data[0]
     pid = card["id"]
@@ -641,11 +672,23 @@ async def ebay_sold(pokedex_id: UUID):
         return {"cached": True, "sales": cached}
 
     sb = get_supabase()
-    card = sb.table("pokedex").select("id, nom, extension").eq("id", str(pokedex_id)).single().execute()
+    card = (
+        sb.table("pokedex")
+        .select("id, nom, extension, langue, ebay_keyword, ebay_url")
+        .eq("id", str(pokedex_id))
+        .single()
+        .execute()
+    )
     if not card.data:
         raise HTTPException(404, "Carte Pokédex introuvable")
+    c = card.data
     result = await sync_pokedex_sales(
-        str(pokedex_id), card.data.get("nom") or "", card.data.get("extension") or ""
+        str(pokedex_id),
+        c.get("nom") or "",
+        c.get("extension") or "",
+        langue=c.get("langue") or "FR",
+        ebay_keyword=c.get("ebay_keyword"),
+        ebay_url=c.get("ebay_url"),
     )
     return {"cached": False, **result}
 
@@ -654,11 +697,25 @@ async def ebay_sold(pokedex_id: UUID):
 async def ebay_sync():
     """Synchronise toutes les cartes du Pokédex avec eBay (30j + MAJ champs)."""
     sb = get_supabase()
-    cards = sb.table("pokedex").select("id, nom, extension").order("nom").execute().data or []
+    cards = (
+        sb.table("pokedex")
+        .select("id, nom, extension, langue, ebay_keyword, ebay_url")
+        .order("nom")
+        .execute()
+        .data
+        or []
+    )
     ok, errors = 0, []
     for c in cards:
         try:
-            await sync_pokedex_sales(str(c["id"]), c.get("nom") or "", c.get("extension") or "")
+            await sync_pokedex_sales(
+                str(c["id"]),
+                c.get("nom") or "",
+                c.get("extension") or "",
+                langue=c.get("langue") or "FR",
+                ebay_keyword=c.get("ebay_keyword"),
+                ebay_url=c.get("ebay_url"),
+            )
             ok += 1
         except Exception as exc:  # noqa: BLE001
             errors.append({"id": str(c["id"]), "nom": c.get("nom"), "error": str(exc)})

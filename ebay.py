@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from urllib.parse import urlencode
 
 import httpx
@@ -74,6 +74,46 @@ _FRENCH_MONTHS = {
 }
 
 # Segments CardMarket à exclure des keywords (catégories produit, pas le nom commercial)
+LANGUES_POKEDEX = frozenset({"FR", "EN", "JP", "IT", "DE", "ES"})
+
+_LANGUE_EBAY_AUTO = {
+    "FR": "French",
+    "JP": "Japanese",
+    "IT": "Italian",
+}
+
+_LANGUE_EBAY_MANUAL = {
+    "FR": "French",
+    "JP": "Japanese",
+}
+
+_SEALED_CATEGORY_PARTS = frozenset(
+    {
+        "box sets",
+        "sealed products",
+        "booster",
+        "boosters",
+        "booster box",
+        "booster boxes",
+        "display",
+        "theme deck",
+        "theme decks",
+        "trainer kits",
+        "elite trainer box",
+        "etb",
+        "collection",
+        "collections",
+        "tin",
+        "tins",
+    }
+)
+
+_SEALED_HINT_RE = re.compile(
+    r"\b(?:booster\s*box|elite\s*trainer|etb|sealed|display|collection\s*box|"
+    r"booster\s*pack|theme\s*deck|trainer\s*kit|tin)\b",
+    re.I,
+)
+
 _EBAY_CATEGORY_PARTS = frozenset(
     {
         "box sets",
@@ -101,6 +141,13 @@ _EBAY_CATEGORY_PARTS = frozenset(
         "card market",
     }
 )
+
+
+@dataclass
+class EbaySearchPlan:
+    search_url: Optional[str] = None
+    keywords: Optional[str] = None
+    source: Literal["url", "keyword", "auto"] = "auto"
 
 
 @dataclass
@@ -301,8 +348,37 @@ def clean_extension_for_ebay(extension: str) -> str:
     return ext
 
 
-def build_keywords(nom: str, extension: str) -> str:
-    """Nom commercial + extension (set) + Pokemon pour la recherche eBay."""
+def _keyword_has_token(keyword: str, token: str) -> bool:
+    return bool(re.search(rf"\b{re.escape(token)}\b", keyword, re.I))
+
+
+def apply_langue_to_keyword(
+    keyword: str,
+    langue: str,
+    *,
+    manual: bool = False,
+) -> str:
+    """Ajoute le filtre langue au keyword (auto : FR/JP/IT ; manuel : FR/JP)."""
+    lang = (langue or "FR").upper()
+    tokens = _LANGUE_EBAY_MANUAL if manual else _LANGUE_EBAY_AUTO
+    token = tokens.get(lang, "")
+    if not token or _keyword_has_token(keyword, token):
+        return keyword.strip()
+    return f"{keyword.strip()} {token}".strip()
+
+
+def is_sealed_product(nom: str, extension: str = "") -> bool:
+    """Détecte un produit scellé depuis le nom / extension CardMarket."""
+    for part in (nom or "").split(" | "):
+        p = part.strip().lower()
+        if p in _SEALED_CATEGORY_PARTS:
+            return True
+    combined = f"{nom or ''} {extension or ''}"
+    return bool(_SEALED_HINT_RE.search(combined))
+
+
+def build_keywords(nom: str, extension: str, langue: str = "FR") -> str:
+    """Nom commercial + extension + Pokemon + filtre langue + sealed si besoin."""
     parts: list[str] = []
     name = clean_nom_for_ebay(nom)
     if name:
@@ -315,7 +391,38 @@ def build_keywords(nom: str, extension: str) -> str:
         keyword = f"{keyword} Pokemon"
     elif not keyword:
         keyword = "Pokemon"
-    return keyword
+    if is_sealed_product(nom, extension) and not _keyword_has_token(keyword, "sealed"):
+        keyword = f"{keyword} sealed"
+    return apply_langue_to_keyword(keyword, langue, manual=False)
+
+
+def resolve_ebay_search(
+    nom: str,
+    extension: str = "",
+    *,
+    langue: str = "FR",
+    ebay_keyword: Optional[str] = None,
+    ebay_url: Optional[str] = None,
+) -> EbaySearchPlan:
+    """
+    Priorité 1 : URL eBay custom
+    Priorité 2 : keyword manuel (+ filtre langue FR/JP)
+    Priorité 3 : auto depuis nom CardMarket
+    """
+    custom_url = (ebay_url or "").strip()
+    if custom_url and re.search(r"ebay\.(com|fr|co\.uk|de|it|es)", custom_url, re.I):
+        logger.info("eBay source=url custom")
+        return EbaySearchPlan(search_url=custom_url, source="url")
+
+    manual_kw = (ebay_keyword or "").strip()
+    if manual_kw:
+        kw = apply_langue_to_keyword(manual_kw, langue, manual=True)
+        logger.info("eBay source=keyword manuel: %s", kw)
+        return EbaySearchPlan(keywords=kw, source="keyword")
+
+    kw = build_keywords(nom, extension, langue)
+    logger.info("eBay source=auto: %s", kw)
+    return EbaySearchPlan(keywords=kw, source="auto")
 
 
 def _should_skip_keywords(keywords: str) -> bool:
@@ -325,13 +432,18 @@ def _should_skip_keywords(keywords: str) -> bool:
 async def fetch_sold_items(
     *,
     keywords: Optional[str] = None,
+    search_url: Optional[str] = None,
     category_id: str = EBAY_CATEGORY_POKEMON,
     days: Optional[int] = None,
 ) -> list[EbaySale]:
     """Scrape la page eBay « objets vendus » (httpx async, pas d'API Finding)."""
-    url = build_search_url(keywords=keywords, category_id=category_id)
-    if keywords:
-        logger.info(f"eBay keyword: {keywords}")
+    if search_url:
+        url = search_url
+        logger.info("eBay URL custom: %s", url)
+    else:
+        url = build_search_url(keywords=keywords, category_id=category_id)
+        if keywords:
+            logger.info("eBay keyword: %s", keywords)
 
     async with httpx.AsyncClient(
         timeout=30.0,
@@ -430,13 +542,31 @@ def store_sales(
     return len(payload)
 
 
-async def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[str, Any]:
+async def sync_pokedex_sales(
+    pokedex_id: str,
+    nom: str,
+    extension: str = "",
+    *,
+    langue: str = "FR",
+    ebay_keyword: Optional[str] = None,
+    ebay_url: Optional[str] = None,
+) -> dict[str, Any]:
     """Sync ventes eBay via scraping HTML + met à jour champs eBay dans pokedex."""
-    keywords = build_keywords(nom, extension)
-    if _should_skip_keywords(keywords):
-        raise RuntimeError("Nom/extension insuffisants pour eBay")
-
-    all_sales = await fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
+    plan = resolve_ebay_search(
+        nom,
+        extension,
+        langue=langue,
+        ebay_keyword=ebay_keyword,
+        ebay_url=ebay_url,
+    )
+    if plan.search_url:
+        all_sales = await fetch_sold_items(search_url=plan.search_url)
+        keywords = plan.keywords or ""
+    else:
+        keywords = plan.keywords or ""
+        if _should_skip_keywords(keywords):
+            raise RuntimeError("Nom/extension insuffisants pour eBay")
+        all_sales = await fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
     now = datetime.now(timezone.utc)
     cutoff_30 = now - timedelta(days=30)
     cutoff_7 = now - timedelta(days=7)
@@ -495,4 +625,5 @@ async def sync_pokedex_sales(pokedex_id: str, nom: str, extension: str) -> dict[
             "nb_ventes": len(sales_7),
         },
         "keywords": keywords,
+        "source": plan.source,
     }
