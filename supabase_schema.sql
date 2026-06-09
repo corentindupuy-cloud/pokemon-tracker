@@ -20,6 +20,8 @@ create table if not exists pokedex (
     langue text default 'FR',
     ebay_keyword text,
     ebay_url text,
+    prix_median_ebay float,
+    date_vente_plus_recente timestamptz,
     derniere_maj timestamptz,
     created_at timestamptz default now()
 );
@@ -54,6 +56,8 @@ create table if not exists radar (
     prix_cible float,
     priorite int check (priorite >= 1 and priorite <= 5),
     source_potentielle text,
+    marge_minimum float,
+    alerte_active boolean default false,
     urgence text,
     statut text default 'Actif',
     notes text,

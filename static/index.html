@@ -9,19 +9,13 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <header>
+  <header class="app-header">
     <a href="/" class="brand" aria-label="Hajime — TCG Tracker">
       <span class="brand-logo-wrap">
-        <img
-          src="/static/images/hajime-logo.png?v={{STATIC_VERSION}}"
-          alt="Hajime"
-          class="brand-logo"
-          width="120"
-          height="110"
-        />
+        <img src="/static/images/hajime-logo.png?v={{STATIC_VERSION}}" alt="Hajime" class="brand-logo" width="120" height="110" />
       </span>
     </a>
-    <nav class="tabs" id="tabs">
+    <nav class="tabs desktop-tabs" id="tabs">
       <button data-tab="dashboard" class="active">Dashboard</button>
       <button data-tab="pokedex">Pokédex</button>
       <button data-tab="stock">Stock</button>
@@ -31,13 +25,22 @@
     </nav>
   </header>
 
-  <main>
+  <main class="app-main">
     <!-- Dashboard -->
     <section id="panel-dashboard" class="panel active">
+      <div class="search-bar-wrap" data-search-scope="dashboard"></div>
       <div class="kpi-grid" id="kpi-grid"></div>
+      <div class="dashboard-section card">
+        <h2>🎯 Opportunités détectées</h2>
+        <div id="dash-opportunities" class="opp-list"></div>
+      </div>
+      <div class="dashboard-section card">
+        <h2>📊 Performance par carte</h2>
+        <div id="dash-top-marges"></div>
+      </div>
       <div class="charts-grid">
         <div class="chart-card">
-          <h3>Valeur du stock (€)</h3>
+          <h3>Capital investi / Valeur stock (€)</h3>
           <canvas id="chart-stock"></canvas>
         </div>
         <div class="chart-card">
@@ -49,44 +52,20 @@
 
     <!-- Pokédex -->
     <section id="panel-pokedex" class="panel">
-      <form class="add-form pokedex-add-form" id="form-pokedex-add">
-        <input
-          type="url"
-          id="url-input"
-          required
-          placeholder="URL CardMarket (obligatoire)"
-        />
-        <select id="langue-select" title="Langue">
-          <option value="FR" selected>🇫🇷 FR</option>
-          <option value="EN">🇬🇧 EN</option>
-          <option value="JP">🇯🇵 JP</option>
-          <option value="IT">🇮🇹 IT</option>
-          <option value="DE">🇩🇪 DE</option>
-          <option value="ES">🇪🇸 ES</option>
-        </select>
-        <input
-          type="url"
-          id="ebay-url-input"
-          placeholder="URL eBay sold (optionnel)"
-        />
-        <input
-          type="text"
-          id="ebay-keyword-input"
-          placeholder="Keyword eBay (optionnel)"
-        />
-        <button type="submit" class="btn btn-accent">Ajouter</button>
+      <div class="search-bar-wrap" data-search-scope="pokedex"></div>
+      <div class="panel-toolbar">
         <button type="button" class="btn" id="btn-scrape-all">Scraper tout</button>
         <div class="loader" id="pokedex-loader"><span>Scraping en cours…</span></div>
-      </form>
-      <div class="table-scroll">
-        <table class="pokedex-table">
+      </div>
+      <div class="table-scroll desktop-only">
+        <table class="pokedex-table data-table">
           <thead>
             <tr>
               <th>Carte</th>
               <th>Extension</th>
               <th>État</th>
-              <th>Prix CM (€)</th>
-              <th>eBay 30j</th>
+              <th>Prix CM</th>
+              <th>eBay 60j</th>
               <th>Tendance 7j</th>
               <th>MAJ</th>
               <th class="actions-col-h">Actions</th>
@@ -95,86 +74,73 @@
           <tbody id="pokedex-tbody"></tbody>
         </table>
       </div>
+      <div class="mobile-cards" id="pokedex-cards"></div>
     </section>
 
     <!-- Stock -->
     <section id="panel-stock" class="panel">
-      <form class="add-form" id="form-stock">
-        <select id="stock-pokedex-id" required title="Carte Pokédex">
-          <option value="">— Carte (Pokédex) —</option>
-        </select>
-        <input type="text" id="stock-ref" placeholder="Réf (PKM-001)" />
-        <input type="number" id="stock-prix" step="0.01" min="0" placeholder="Prix achat €" required />
-        <input type="number" id="stock-quantite" min="1" step="1" value="1" placeholder="Qté" title="Quantité" />
-        <input type="date" id="stock-date" />
-        <select id="stock-statut">
-          <option value="En stock">En stock</option>
-          <option value="En vente">En vente</option>
-        </select>
-        <input type="text" id="stock-source" placeholder="Source" />
-        <button type="submit" class="btn btn-accent">+ Stock</button>
-      </form>
-      <div class="toolbar">
-        <select id="stock-filter">
+      <div class="search-bar-wrap" data-search-scope="stock"></div>
+      <div class="panel-toolbar">
+        <button type="button" class="btn btn-accent btn-touch" id="btn-open-stock-modal">+ Ajouter au stock</button>
+        <select id="stock-filter" class="btn-touch">
           <option value="">Tous statuts</option>
           <option value="En stock">En stock</option>
           <option value="En vente">En vente</option>
         </select>
-        <button type="button" class="btn btn-ghost" id="btn-refresh-stock">Actualiser</button>
       </div>
-      <table>
-        <thead>
-          <tr>
-            <th>Carte</th>
-            <th>Réf</th>
-            <th>Prix achat</th>
-            <th title="Utilisez − / + ou saisissez la valeur">Qté</th>
-            <th>Cote CM</th>
-            <th>Marge latente</th>
-            <th>Statut</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="stock-tbody"></tbody>
-      </table>
+      <div class="table-scroll desktop-only">
+        <table class="data-table stock-table">
+          <thead>
+            <tr>
+              <th>Image</th>
+              <th>Nom</th>
+              <th>Lang</th>
+              <th>Prix achat</th>
+              <th>Cote CM</th>
+              <th>eBay 60j</th>
+              <th>Marge lat.</th>
+              <th>Score</th>
+              <th>Statut</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="stock-tbody"></tbody>
+        </table>
+      </div>
+      <div class="mobile-cards" id="stock-cards"></div>
     </section>
 
     <!-- Radar -->
     <section id="panel-radar" class="panel">
-      <form class="add-form" id="form-radar">
-        <select id="radar-pokedex-id" required>
-          <option value="">— Carte (Pokédex) —</option>
-        </select>
-        <input type="number" id="radar-prix-cible" step="0.01" min="0" placeholder="Prix cible €" required />
-        <select id="radar-priorite" title="Priorité (1 = max)">
-          <option value="">Priorité —</option>
-          <option value="5">★★★★★ (5)</option>
-          <option value="4">★★★★ (4)</option>
-          <option value="3">★★★ (3)</option>
-          <option value="2">★★ (2)</option>
-          <option value="1">★ (1)</option>
-        </select>
-        <input type="text" id="radar-source" placeholder="Source potentielle" />
-        <button type="submit" class="btn btn-accent">+ Radar</button>
-      </form>
-      <table>
-        <thead>
-          <tr>
-            <th>Carte</th>
-            <th>Priorité</th>
-            <th>Prix cible</th>
-            <th>Cote actuelle</th>
-            <th>Urgence</th>
-            <th>Statut</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="radar-tbody"></tbody>
-      </table>
+      <div class="search-bar-wrap" data-search-scope="radar"></div>
+      <div class="panel-toolbar">
+        <button type="button" class="btn btn-accent btn-touch" id="btn-open-radar-modal">+ Surveiller</button>
+      </div>
+      <div class="table-scroll desktop-only">
+        <table class="data-table radar-table">
+          <thead>
+            <tr>
+              <th>Image</th>
+              <th>Nom</th>
+              <th>Lang</th>
+              <th>Cote CM</th>
+              <th>eBay 60j</th>
+              <th>Prix cible</th>
+              <th>Marge est.</th>
+              <th>Urgence</th>
+              <th>Alerte</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="radar-tbody"></tbody>
+        </table>
+      </div>
+      <div class="mobile-cards" id="radar-cards"></div>
     </section>
 
     <!-- Tendances -->
     <section id="panel-tendances" class="panel">
+      <div class="search-bar-wrap" data-search-scope="tendances"></div>
       <div class="toolbar">
         <div class="segmented">
           <button type="button" class="seg active" data-cat="all">Tous</button>
@@ -183,53 +149,27 @@
         </div>
         <button type="button" class="btn btn-ghost" id="btn-refresh-trending">Actualiser</button>
       </div>
-
       <div class="tendances-grid">
         <div class="card">
           <h2>Top ventes semaine</h2>
           <p class="muted" id="trending-date"></p>
-          <table>
-            <thead>
-              <tr>
-                <th>Produit</th>
-                <th>Prix moyen</th>
-                <th>Nb ventes</th>
-                <th>Variation</th>
-                <th></th>
-              </tr>
-            </thead>
+          <table class="data-table">
+            <thead><tr><th>Produit</th><th>Prix moyen</th><th>Nb ventes</th><th>Variation</th><th></th></tr></thead>
             <tbody id="trending-tbody"></tbody>
           </table>
         </div>
-
         <div class="card">
           <h2>Comparatif Pokédex (CM vs eBay)</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>Carte</th>
-                <th>CM</th>
-                <th>eBay 30j</th>
-                <th>Écart</th>
-                <th>Volume</th>
-              </tr>
-            </thead>
+          <table class="data-table">
+            <thead><tr><th>Carte</th><th>CM</th><th>eBay 60j</th><th>Écart</th><th>Volume</th></tr></thead>
             <tbody id="compare-tbody"></tbody>
           </table>
         </div>
-
         <div class="card">
           <h2>Opportunités détectées</h2>
-          <p class="muted">Si CM &lt; eBay (moy 30j) de plus de 20%</p>
-          <table>
-            <thead>
-              <tr>
-                <th>Carte</th>
-                <th>CM</th>
-                <th>eBay</th>
-                <th>Gain potentiel</th>
-              </tr>
-            </thead>
+          <p class="muted">Si CM &lt; eBay (moy 60j) de plus de 20%</p>
+          <table class="data-table">
+            <thead><tr><th>Carte</th><th>CM</th><th>eBay</th><th>Gain potentiel</th></tr></thead>
             <tbody id="opps-tbody"></tbody>
           </table>
         </div>
@@ -238,36 +178,47 @@
 
     <!-- Vendus -->
     <section id="panel-vendus" class="panel">
+      <div class="search-bar-wrap" data-search-scope="vendus"></div>
       <form class="add-form" id="form-vente">
-        <select id="vente-stock-id" required>
+        <select id="vente-stock-id" required class="btn-touch">
           <option value="">— Ligne stock —</option>
         </select>
         <input type="number" id="vente-prix" step="0.01" min="0" placeholder="Prix vente €" required />
         <input type="number" id="vente-frais" step="0.01" min="0" placeholder="Frais €" value="0" />
-        <input type="text" id="vente-plateforme" placeholder="Plateforme (eBay, Vinted…)" />
+        <input type="text" id="vente-plateforme" placeholder="Plateforme" />
         <input type="date" id="vente-date" />
-        <button type="submit" class="btn btn-accent">+ Vente</button>
+        <button type="submit" class="btn btn-accent btn-touch">+ Vente</button>
       </form>
-      <table>
-        <thead>
-          <tr>
-            <th>Carte</th>
-            <th>Réf</th>
-            <th>Prix vente</th>
-            <th>Frais</th>
-            <th>Bénéfice</th>
-            <th>Date</th>
-            <th>Plateforme</th>
-          </tr>
-        </thead>
-        <tbody id="vendus-tbody"></tbody>
-      </table>
+      <div class="table-scroll desktop-only">
+        <table class="data-table">
+          <thead><tr><th>Carte</th><th>Réf</th><th>Prix vente</th><th>Frais</th><th>Bénéfice</th><th>Date</th><th>Plateforme</th></tr></thead>
+          <tbody id="vendus-tbody"></tbody>
+        </table>
+      </div>
+      <div class="mobile-cards" id="vendus-cards"></div>
     </section>
   </main>
 
+  <nav class="bottom-nav mobile-only" id="bottom-nav" aria-label="Navigation mobile">
+    <button data-tab="dashboard" class="active"><span>📊</span><small>Dash</small></button>
+    <button data-tab="pokedex"><span>📖</span><small>Pokédex</small></button>
+    <button data-tab="stock"><span>📦</span><small>Stock</small></button>
+    <button data-tab="radar"><span>📡</span><small>Radar</small></button>
+    <button data-tab="vendus"><span>💰</span><small>Vendus</small></button>
+  </nav>
+
+  <!-- Modal image -->
   <div class="modal-overlay" id="img-modal">
     <button class="modal-close" id="modal-close">×</button>
     <img id="modal-img" alt="Carte" />
+  </div>
+
+  <!-- Modal générique -->
+  <div class="modal-overlay" id="app-modal">
+    <div class="modal-sheet">
+      <button type="button" class="modal-close" id="app-modal-close">×</button>
+      <div id="app-modal-body"></div>
+    </div>
   </div>
 
   <script src="/static/app.js?v={{STATIC_VERSION}}"></script>

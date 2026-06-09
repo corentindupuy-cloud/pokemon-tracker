@@ -226,6 +226,36 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text.lower().strip())
 
 
+_CM_CATEGORY_SUFFIXES = frozenset(
+    {
+        "singles",
+        "box sets",
+        "sealed products",
+        "booster",
+        "boosters",
+        "cardmarket",
+        "card market",
+    }
+)
+
+
+def clean_cardmarket_name(nom: str) -> str:
+    """
+    Nettoie un nom CardMarket :
+    « Groudon | Singles | Cardmarket » → « Groudon »
+    """
+    s = (nom or "").strip()
+    s = re.sub(r"\s*\|\s*Card\s*Market\s*", "", s, flags=re.I)
+    s = re.sub(r"\s*\|\s*Cardmarket\s*", "", s, flags=re.I)
+    if " | " in s:
+        parts = [p.strip() for p in s.split(" | ") if p.strip()]
+        for part in parts:
+            if part.lower() not in _CM_CATEGORY_SUFFIXES:
+                return part
+        return parts[0] if parts else s
+    return s
+
+
 def condition_to_min(condition: str) -> int:
     return CONDITION_MAP.get(normalize(condition), 2)
 
@@ -432,7 +462,7 @@ class CardMarketScraper:
             meta = await self._page.evaluate(EXTRACT_META_JS)
             prix = parse_euro_price(prices.get("priceText") or "")
             trend = parse_trend_float(prices.get("trend7d"))
-            nom = (meta.get("title") or "").strip() or "Carte inconnue"
+            nom = clean_cardmarket_name((meta.get("title") or "").strip()) or "Carte inconnue"
             extension = (meta.get("extension") or "").strip()
             image = normalize_image_url(meta.get("imageUrl"))
             clean_url = url.split("?")[0]

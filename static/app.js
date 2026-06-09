@@ -23,16 +23,271 @@ async function api(path, opts = {}) {
 
 /** Cache Pokédex pour les listes déroulantes Stock / Radar */
 let pokedexCache = [];
+let searchTimers = new Map();
+let trendingCat = "all";
+let chartStock = null;
+let chartCa = null;
+
+function opportunityScore(row) {
+  const cm = row.prix_actuel;
+  const ebay = row.prix_moyen_ebay;
+  if (ebay == null || cm == null || cm <= 0) {
+    return { emoji: "⚪", label: "Pas de données", pct: null, cls: "score-none" };
+  }
+  const ratio = ebay / cm;
+  const pct = Math.round((ratio - 1) * 100);
+  if (ratio > 1.2) return { emoji: "🟢", label: `Opportunité (+${pct}%)`, pct, cls: "score-good" };
+  if (ratio > 1.1) return { emoji: "🟡", label: `Correct (+${pct}%)`, pct, cls: "score-ok" };
+  if (ratio < 0.9) return { emoji: "🔴", label: `Surcotée (${pct}%)`, pct, cls: "score-bad" };
+  return { emoji: "⚪", label: "Neutre", pct, cls: "score-none" };
+}
+
+function openAppModal(html) {
+  $("#app-modal-body").innerHTML = html;
+  $("#app-modal").classList.add("open");
+}
+
+function closeAppModal() {
+  $("#app-modal").classList.remove("open");
+  $("#app-modal-body").innerHTML = "";
+}
+
+$("#app-modal-close")?.addEventListener("click", closeAppModal);
+$("#app-modal")?.addEventListener("click", (e) => {
+  if (e.target.id === "app-modal") closeAppModal();
+});
+
+function initUniversalSearchBars() {
+  $$(".search-bar-wrap").forEach((wrap) => {
+    if (wrap.dataset.initialized) return;
+    wrap.dataset.initialized = "1";
+    wrap.innerHTML = `
+      <input type="search" class="universal-search" placeholder="Rechercher une carte Pokémon…" autocomplete="off" />
+      <div class="search-dropdown" role="listbox"></div>
+    `;
+    const input = wrap.querySelector(".universal-search");
+    const dropdown = wrap.querySelector(".search-dropdown");
+
+    input.addEventListener("input", () => {
+      const q = input.value.trim();
+      clearTimeout(searchTimers.get(wrap));
+      if (q.length < 2) {
+        dropdown.classList.remove("open");
+        dropdown.innerHTML = "";
+        return;
+      }
+      searchTimers.set(
+        wrap,
+        setTimeout(async () => {
+          try {
+            const results = await api(`/api/search?q=${encodeURIComponent(q)}`);
+            if (!results.length) {
+              dropdown.innerHTML = `<div class="empty" style="padding:1rem">Aucun résultat</div>`;
+            } else {
+              dropdown.innerHTML = results.map((r, i) => `
+                <div class="search-result-item" tabindex="0" data-idx="${i}">
+                  ${r.image_url ? `<img src="/api/image-proxy?url=${encodeURIComponent(r.image_url)}" alt="" loading="lazy" />` : `<div class="thumb-placeholder" style="width:40px;height:54px;font-size:0.7rem">IMG</div>`}
+                  <div class="search-result-meta">
+                    <strong>${escapeAttr(displayNom(r.nom))}</strong>
+                    <small>${escapeAttr(r.extension || "")} ${r.prix_actuel != null ? `· ${fmtEur(r.prix_actuel)}` : ""}</small>
+                  </div>
+                </div>
+              `).join("");
+              dropdown.querySelectorAll(".search-result-item").forEach((el, idx) => {
+                const item = results[idx];
+                const handler = () => onSearchResultClick(item);
+                el.onclick = handler;
+                el.onkeydown = (ev) => { if (ev.key === "Enter") handler(); };
+              });
+            }
+            dropdown.classList.add("open");
+          } catch (err) {
+            dropdown.innerHTML = `<div class="empty" style="padding:1rem">${escapeAttr(err.message)}</div>`;
+            dropdown.classList.add("open");
+          }
+        }, 500)
+      );
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!wrap.contains(e.target)) dropdown.classList.remove("open");
+    });
+  });
+}
+
+async function onSearchResultClick(item) {
+  const existing = pokedexCache.find((c) => c.url_cardmarket?.split("?")[0] === item.url_cardmarket?.split("?")[0]);
+  if (existing) {
+    openAppModal(`
+      <h3>${escapeAttr(displayNom(existing.nom))}</h3>
+      <p class="muted">Déjà dans le Pokédex.</p>
+      <div class="modal-actions">
+        <button class="btn btn-accent btn-touch" data-act="stock" data-id="${existing.id}">Ajouter au Stock</button>
+        <button class="btn btn-touch" data-act="radar" data-id="${existing.id}">Ajouter au Radar</button>
+        <button class="btn btn-ghost btn-touch" data-act="close">Fermer</button>
+      </div>
+    `);
+    bindSearchActionButtons(existing);
+    return;
+  }
+
+  openAppModal(`<p class="muted">Ajout au Pokédex…</p>`);
+  try {
+    const res = await api("/api/pokedex", {
+      method: "POST",
+      body: JSON.stringify({ url_cardmarket: item.url_cardmarket, langue: "FR" }),
+    });
+    await loadPokedexOptions();
+    openAppModal(`
+      <h3>${escapeAttr(displayNom(res.nom || item.nom))}</h3>
+      <p class="muted">Carte ajoutée au Pokédex.</p>
+      <div class="modal-actions">
+        <button class="btn btn-accent btn-touch" data-act="stock" data-id="${res.pokedex_id}">Ajouter au Stock</button>
+        <button class="btn btn-touch" data-act="radar" data-id="${res.pokedex_id}">Ajouter au Radar</button>
+        <button class="btn btn-ghost btn-touch" data-act="close">Juste suivre</button>
+      </div>
+    `);
+    bindSearchActionButtons({ id: res.pokedex_id, nom: res.nom || item.nom });
+    await loadPokedex();
+    loadDashboard();
+  } catch (err) {
+    openAppModal(`<p class="empty">Erreur : ${escapeAttr(err.message)}</p>`);
+  }
+}
+
+function bindSearchActionButtons(card) {
+  $("#app-modal-body").querySelectorAll("[data-act]").forEach((btn) => {
+    btn.onclick = () => {
+      const act = btn.dataset.act;
+      closeAppModal();
+      if (act === "stock") openStockModal(card.id);
+      if (act === "radar") openRadarModal(card.id);
+    };
+  });
+}
+
+function pokedexAutocompleteInput(id = "modal-pokedex-search") {
+  const opts = pokedexCache.map((c) => {
+    const label = `${displayNom(c.nom)}${c.extension ? ` — ${c.extension}` : ""}`;
+    return `<option value="${c.id}">${escapeAttr(label)}</option>`;
+  }).join("");
+  return `
+    <label for="${id}">Carte (Pokédex)</label>
+    <select id="${id}" required class="btn-touch"><option value="">— Choisir —</option>${opts}</select>
+  `;
+}
+
+function openStockModal(preselectId = null) {
+  openAppModal(`
+    <h3>Ajouter au stock</h3>
+    <form class="modal-form" id="modal-form-stock">
+      ${pokedexAutocompleteInput()}
+      <label>Prix d'achat (€)</label>
+      <input type="number" id="modal-stock-prix" step="0.01" min="0" required />
+      <label>Date d'achat</label>
+      <input type="date" id="modal-stock-date" value="${new Date().toISOString().slice(0, 10)}" />
+      <label>Source</label>
+      <select id="modal-stock-source">
+        <option value="Leboncoin">Leboncoin</option>
+        <option value="Vinted">Vinted</option>
+        <option value="CardMarket">CardMarket</option>
+        <option value="Salon">Salon</option>
+        <option value="Autre">Autre</option>
+      </select>
+      <label>Quantité</label>
+      <input type="number" id="modal-stock-qty" min="1" value="1" />
+      <label>Notes</label>
+      <input type="text" id="modal-stock-notes" placeholder="Optionnel" />
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-accent btn-touch">Enregistrer</button>
+        <button type="button" class="btn btn-ghost btn-touch" id="modal-stock-cancel">Annuler</button>
+      </div>
+    </form>
+  `);
+  if (preselectId) $("#modal-pokedex-search").value = preselectId;
+  $("#modal-stock-cancel").onclick = closeAppModal;
+  $("#modal-form-stock").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = $("#modal-pokedex-search").value;
+    if (!pid) return alert("Choisissez une carte");
+    try {
+      await api("/api/stock", {
+        method: "POST",
+        body: JSON.stringify({
+          pokedex_id: pid,
+          prix_achat: parseFloat($("#modal-stock-prix").value),
+          date_achat: $("#modal-stock-date").value || null,
+          source: $("#modal-stock-source").value,
+          quantite: parseInt($("#modal-stock-qty").value, 10) || 1,
+          notes: $("#modal-stock-notes").value.trim() || null,
+          statut: "En stock",
+        }),
+      });
+      closeAppModal();
+      await loadStock();
+      loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
+function openRadarModal(preselectId = null) {
+  openAppModal(`
+    <h3>Surveiller une carte</h3>
+    <form class="modal-form" id="modal-form-radar">
+      ${pokedexAutocompleteInput("modal-radar-pokedex")}
+      <label>Prix cible d'achat (€)</label>
+      <input type="number" id="modal-radar-prix" step="0.01" min="0" required />
+      <label>Marge minimum visée (%)</label>
+      <input type="number" id="modal-radar-marge" step="1" min="0" placeholder="ex: 20" />
+      <label>Source potentielle</label>
+      <select id="modal-radar-source">
+        <option value="eBay">eBay</option>
+        <option value="Vinted">Vinted</option>
+        <option value="Leboncoin">Leboncoin</option>
+        <option value="Salon">Salon</option>
+      </select>
+      <label>Notes</label>
+      <input type="text" id="modal-radar-notes" />
+      <label><input type="checkbox" id="modal-radar-alerte" /> Alerte email quand CM ≤ prix cible</label>
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-accent btn-touch">Enregistrer</button>
+        <button type="button" class="btn btn-ghost btn-touch" id="modal-radar-cancel">Annuler</button>
+      </div>
+    </form>
+  `);
+  if (preselectId) $("#modal-radar-pokedex").value = preselectId;
+  $("#modal-radar-cancel").onclick = closeAppModal;
+  $("#modal-form-radar").onsubmit = async (e) => {
+    e.preventDefault();
+    const pid = $("#modal-radar-pokedex").value;
+    if (!pid) return alert("Choisissez une carte");
+    try {
+      await api("/api/radar", {
+        method: "POST",
+        body: JSON.stringify({
+          pokedex_id: pid,
+          prix_cible: parseFloat($("#modal-radar-prix").value),
+          marge_minimum: parseFloat($("#modal-radar-marge").value) || null,
+          source_potentielle: $("#modal-radar-source").value,
+          notes: $("#modal-radar-notes").value.trim() || null,
+          alerte_active: $("#modal-radar-alerte").checked,
+        }),
+      });
+      closeAppModal();
+      await loadRadar();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
+$("#btn-open-stock-modal")?.addEventListener("click", () => openStockModal());
+$("#btn-open-radar-modal")?.addEventListener("click", () => openRadarModal());
 
 async function loadPokedexOptions() {
   pokedexCache = await api("/api/pokedex");
-  const opts = pokedexCache.map((c) => {
-    const label = `${displayNom(c.nom)}${c.extension ? ` — ${c.extension}` : ""}`;
-    return `<option value="${c.id}">${label}</option>`;
-  }).join("");
-  const empty = '<option value="">— Carte (Pokédex) —</option>';
-  $("#stock-pokedex-id").innerHTML = empty + opts;
-  $("#radar-pokedex-id").innerHTML = empty + opts;
 }
 
 async function loadStockForVenteOptions() {
@@ -176,9 +431,6 @@ function prioriteStars(n) {
   return "★".repeat(v) + "☆".repeat(5 - v);
 }
 
-let chartStock = null;
-let chartCa = null;
-
 function fmtEur(v) {
   if (v == null || v === "") return "—";
   return `${Number(v).toFixed(2)} €`;
@@ -219,7 +471,7 @@ function ebayCell(row) {
   const tip = [
     `Min: ${fmtEur(row.prix_min_ebay)}`,
     `Max: ${fmtEur(row.prix_max_ebay)}`,
-    `${nb} vente(s) sur 30j`,
+    `${nb} vente(s) sur 60j`,
     row.ebay_keyword ? `Keyword: ${row.ebay_keyword}` : null,
   ].filter(Boolean).join(" · ");
   return (
@@ -259,9 +511,6 @@ function qtyCell(row) {
     <button type="button" class="btn-qty btn-qty-plus" data-id="${row.id}" aria-label="Augmenter">+</button>
   </div>`;
 }
-
-// Tendances
-let trendingCat = "all";
 
 async function loadTrending() {
   const data = await api(`/api/ebay/trending?categorie=${encodeURIComponent(trendingCat)}`);
@@ -399,15 +648,22 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleString("fr-FR", { dateStyle: "short", timeStyle: "short" });
 }
 
-// Tabs
-$$("#tabs button").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    $$("#tabs button").forEach((b) => b.classList.remove("active"));
-    btn.classList.add("active");
-    $$(".panel").forEach((p) => p.classList.remove("active"));
-    $(`#panel-${btn.dataset.tab}`).classList.add("active");
-    loadTab(btn.dataset.tab);
+function switchTab(tab) {
+  $$("#tabs button, #bottom-nav button").forEach((b) => {
+    b.classList.toggle("active", b.dataset.tab === tab);
   });
+  $$(".panel").forEach((p) => p.classList.remove("active"));
+  const panel = $(`#panel-${tab}`);
+  if (panel) panel.classList.add("active");
+  loadTab(tab);
+}
+
+$$("#tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+});
+
+$$("#bottom-nav button").forEach((btn) => {
+  btn.addEventListener("click", () => switchTab(btn.dataset.tab));
 });
 
 async function loadTab(tab) {
@@ -478,7 +734,29 @@ async function loadDashboard() {
     <div class="kpi-card"><div class="label">Cartes Pokédex</div><div class="value">${k.nb_cartes_pokedex}</div></div>
     <div class="kpi-card"><div class="label">En stock</div><div class="value">${k.nb_en_stock}</div></div>
     <div class="kpi-card"><div class="label">Radar</div><div class="value">${k.nb_radar}</div></div>
+    <div class="kpi-card"><div class="label">Vendus</div><div class="value">${k.nb_vendus ?? 0}</div></div>
   `;
+
+    const opps = k.opportunities || [];
+    $("#dash-opportunities").innerHTML = opps.length
+      ? opps.map((o) => `
+        <div class="opp-item">
+          <div><strong>${escapeAttr(displayNom(o.nom))}</strong><br><small class="muted">${escapeAttr(o.detail || "")}</small></div>
+          <span class="badge badge-green">${o.type === "radar" ? "🎯 Radar" : "📦 Stock"}</span>
+        </div>`).join("")
+      : `<p class="muted">Aucune opportunité pour le moment.</p>`;
+
+    const tops = k.top_marges || [];
+    $("#dash-top-marges").innerHTML = tops.length
+      ? `<table class="data-table"><thead><tr><th>Carte</th><th>Achat</th><th>CM</th><th>Marge lat.</th></tr></thead><tbody>
+        ${tops.map((t) => `<tr>
+          <td>${escapeAttr(displayNom(t.nom))}<br><small class="muted">${escapeAttr(t.extension || "")}</small></td>
+          <td>${fmtEur(t.prix_achat)}</td>
+          <td>${fmtEur(t.prix_actuel)}</td>
+          <td class="marge-pos">${fmtEur(t.marge_latente)}</td>
+        </tr>`).join("")}
+        </tbody></table>`
+      : `<p class="muted">Pas encore de marges en stock.</p>`;
   } catch (err) {
     console.error(err);
     $("#kpi-grid").innerHTML = `<p class="empty">Impossible de charger le dashboard : ${err.message}</p>`;
@@ -545,10 +823,10 @@ async function loadPokedex() {
   const rows = await api("/api/pokedex");
   const tb = $("#pokedex-tbody");
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="8" class="empty">Aucune carte — ajoutez une URL CardMarket</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="8" class="empty">Aucune carte — recherchez un nom ci-dessus</td></tr>`;
     return;
   }
-  tb.innerHTML = rows.map((r) => `
+  const renderRow = (r) => `
     <tr>
       <td class="card-col">${cardCell(r)}</td>
       <td>${r.extension || "—"}</td>
@@ -558,8 +836,24 @@ async function loadPokedex() {
       <td>${r.tendance_7j != null ? r.tendance_7j : "—"}</td>
       <td>${fmtDate(r.derniere_maj)}</td>
       <td class="actions-col">${pokedexActionsHtml(r.id)}</td>
-    </tr>
-  `).join("");
+    </tr>`;
+
+  tb.innerHTML = rows.map(renderRow).join("");
+
+  const cardsEl = $("#pokedex-cards");
+  if (cardsEl) {
+    cardsEl.innerHTML = rows.map((r) => `
+      <article class="item-card">
+        <div class="item-card-head">${cardCell(r)}</div>
+        <dl class="item-card-body">
+          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
+          <dt>eBay 60j</dt><dd>${ebayCell(r)}</dd>
+          <dt>Extension</dt><dd>${escapeAttr(r.extension || "—")}</dd>
+        </dl>
+        <div class="item-card-actions">${pokedexActionsHtml(r.id)}</div>
+      </article>
+    `).join("");
+  }
 
   $$(".btn-delete-pokedex").forEach((btn) => {
     btn.onclick = () =>
@@ -589,38 +883,7 @@ async function loadPokedex() {
   });
 }
 
-$("#form-pokedex-add").onsubmit = async (e) => {
-  e.preventDefault();
-  const url = $("#url-input").value.trim();
-  if (!url) return alert("URL CardMarket requise");
-  const langue = $("#langue-select").value;
-  const ebay_url = $("#ebay-url-input").value.trim();
-  const ebay_keyword = $("#ebay-keyword-input").value.trim();
-  const loader = $("#pokedex-loader");
-  loader.classList.add("show");
-  try {
-    await api("/api/pokedex", {
-      method: "POST",
-      body: JSON.stringify({
-        url_cardmarket: url,
-        langue,
-        ebay_url: ebay_url || null,
-        ebay_keyword: ebay_keyword || null,
-      }),
-    });
-    $("#url-input").value = "";
-    $("#ebay-url-input").value = "";
-    $("#ebay-keyword-input").value = "";
-    await loadPokedex();
-    await loadPokedexOptions();
-  } catch (err) {
-    alert(err.message);
-  } finally {
-    loader.classList.remove("show");
-  }
-};
-
-$("#btn-scrape-all").onclick = async () => {
+$("#btn-scrape-all")?.addEventListener("click", async () => {
   const loader = $("#pokedex-loader");
   loader.classList.add("show");
   try {
@@ -634,7 +897,7 @@ $("#btn-scrape-all").onclick = async () => {
   } finally {
     loader.classList.remove("show");
   }
-};
+});
 
 // Stock
 async function loadStock() {
@@ -649,17 +912,39 @@ async function loadStock() {
   tb.innerHTML = rows.map((r) => {
     const m = r.marge_latente;
     const mCls = m > 0 ? "marge-pos" : m < 0 ? "marge-neg" : "";
+    const score = opportunityScore(r);
     return `<tr>
-      <td>${cardCell(r)}</td>
-      <td>${r.ref || "—"}</td>
+      <td>${thumbHtml(r.image_url, displayNom(r.nom))}</td>
+      <td><strong>${escapeAttr(displayNom(r.nom))}</strong><br><small class="muted">${escapeAttr(r.extension || "")}</small></td>
+      <td>${langueBadge(r.langue)}</td>
       <td>${fmtEur(r.prix_achat)}</td>
-      <td class="qty-cell">${qtyCell(r)}</td>
       <td>${fmtEur(r.prix_actuel)}</td>
+      <td>${ebayCell(r)}</td>
       <td class="${mCls}">${m != null ? fmtEur(m) : "—"}</td>
+      <td class="${score.cls}">${score.emoji} ${score.label}</td>
       <td><span class="badge badge-muted">${r.statut}</span></td>
       <td><button type="button" class="btn-delete btn-delete-stock btn-sm" data-id="${r.id}" title="Supprimer">X</button></td>
     </tr>`;
   }).join("");
+
+  const cardsEl = $("#stock-cards");
+  if (cardsEl) {
+    cardsEl.innerHTML = rows.map((r) => {
+      const score = opportunityScore(r);
+      return `<article class="item-card">
+        <div class="item-card-head">${cardCell(r)}</div>
+        <dl class="item-card-body">
+          <dt>Achat</dt><dd>${fmtEur(r.prix_achat)}</dd>
+          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
+          <dt>eBay</dt><dd>${ebayCell(r)}</dd>
+          <dt>Score</dt><dd class="${score.cls}">${score.emoji} ${score.label}</dd>
+        </dl>
+        <div class="item-card-actions">
+          <button type="button" class="btn-delete btn-delete-stock btn-sm" data-id="${r.id}">Supprimer</button>
+        </div>
+      </article>`;
+    }).join("");
+  }
 
   bindStockQtyControls(tb);
 
@@ -668,35 +953,7 @@ async function loadStock() {
   });
 }
 
-$("#stock-filter").onchange = loadStock;
-$("#btn-refresh-stock").onclick = loadStock;
-
-$("#form-stock").onsubmit = async (e) => {
-  e.preventDefault();
-  const pokedex_id = $("#stock-pokedex-id").value;
-  if (!pokedex_id) return alert("Choisissez une carte du Pokédex");
-  const body = {
-    pokedex_id,
-    ref: $("#stock-ref").value.trim() || null,
-    prix_achat: parseFloat($("#stock-prix").value),
-    quantite: parseInt($("#stock-quantite").value, 10) || 1,
-    statut: $("#stock-statut").value,
-    source: $("#stock-source").value.trim() || null,
-  };
-  const d = $("#stock-date").value;
-  if (d) body.date_achat = d;
-  try {
-    await api("/api/stock", { method: "POST", body: JSON.stringify(body) });
-    e.target.reset();
-    $("#stock-statut").value = "En stock";
-    $("#stock-quantite").value = "1";
-    await loadPokedexOptions();
-    await loadStock();
-    loadDashboard();
-  } catch (err) {
-    alert(err.message);
-  }
-};
+$("#stock-filter")?.addEventListener("change", loadStock);
 
 // Radar
 async function loadRadar() {
@@ -706,65 +963,65 @@ async function loadRadar() {
     tb.innerHTML = `<tr><td colspan="7" class="empty">Radar vide</td></tr>`;
     return;
   }
-  tb.innerHTML = rows.map((r) => `
-    <tr>
-      <td>${cardCell(r)}</td>
-      <td>
-        <select class="priorite-select radar-priorite-edit" data-id="${r.id}" data-value="${r.priorite ?? ""}">
-          <option value="">—</option>
-          ${[5, 4, 3, 2, 1].map((n) =>
-            `<option value="${n}" ${r.priorite == n ? "selected" : ""}>${prioriteStars(n)}</option>`
-          ).join("")}
-        </select>
-      </td>
-      <td>${fmtEur(r.prix_cible)}</td>
+  tb.innerHTML = rows.map((r) => {
+    const margeEst = r.prix_actuel != null && r.prix_cible
+      ? Math.round(((r.prix_actuel - r.prix_cible) / r.prix_cible) * 100)
+      : null;
+    return `<tr>
+      <td>${thumbHtml(r.image_url, displayNom(r.nom))}</td>
+      <td><strong>${escapeAttr(displayNom(r.nom))}</strong></td>
+      <td>${langueBadge(r.langue)}</td>
       <td>${fmtEur(r.prix_actuel)}</td>
+      <td>${ebayCell(r)}</td>
+      <td>${fmtEur(r.prix_cible)}</td>
+      <td>${margeEst != null ? `${margeEst}%` : "—"}</td>
       <td>${urgenceBadge(r.urgence)}</td>
-      <td>${r.statut || "—"}</td>
-      <td><button type="button" class="btn-delete btn-delete-radar btn-sm" data-id="${r.id}" title="Supprimer">X</button></td>
-    </tr>
-  `).join("");
+      <td>
+        <label class="toggle-switch" title="Alerte email">
+          <input type="checkbox" class="radar-alerte-toggle" data-id="${r.id}" ${r.alerte_active ? "checked" : ""} />
+          <span class="toggle-slider"></span>
+        </label>
+      </td>
+      <td><button type="button" class="btn-delete btn-delete-radar btn-sm" data-id="${r.id}">X</button></td>
+    </tr>`;
+  }).join("");
+
+  const cardsEl = $("#radar-cards");
+  if (cardsEl) {
+    cardsEl.innerHTML = rows.map((r) => `
+      <article class="item-card">
+        <div class="item-card-head">${cardCell(r)}</div>
+        <dl class="item-card-body">
+          <dt>Cible</dt><dd>${fmtEur(r.prix_cible)}</dd>
+          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
+          <dt>Urgence</dt><dd>${urgenceBadge(r.urgence)}</dd>
+        </dl>
+        <div class="item-card-actions">
+          <button type="button" class="btn-delete btn-delete-radar btn-sm" data-id="${r.id}">Supprimer</button>
+        </div>
+      </article>
+    `).join("");
+  }
 
   $$(".btn-delete-radar").forEach((btn) => {
     btn.onclick = () => deleteRow(`/api/radar/${btn.dataset.id}`, loadRadar);
   });
 
-  $$(".radar-priorite-edit").forEach((sel) => {
-    sel.onchange = async () => {
-      const v = sel.value ? parseInt(sel.value, 10) : null;
+  $$(".radar-alerte-toggle").forEach((cb) => {
+    cb.onchange = async () => {
       try {
-        await api(`/api/radar/${sel.dataset.id}`, {
+        await api(`/api/radar/${cb.dataset.id}`, {
           method: "PUT",
-          body: JSON.stringify({ priorite: v }),
+          body: JSON.stringify({ alerte_active: cb.checked }),
         });
-        await loadRadar();
+        if (cb.checked) console.info("[Hajime] Alerte activée — notification email à brancher (Edge Function)");
       } catch (err) {
         alert(err.message);
+        cb.checked = !cb.checked;
       }
     };
   });
 }
-
-$("#form-radar").onsubmit = async (e) => {
-  e.preventDefault();
-  const pokedex_id = $("#radar-pokedex-id").value;
-  if (!pokedex_id) return alert("Choisissez une carte du Pokédex");
-  try {
-    const body = {
-      pokedex_id,
-      prix_cible: parseFloat($("#radar-prix-cible").value),
-      source_potentielle: $("#radar-source").value.trim() || null,
-    };
-    const pr = $("#radar-priorite").value;
-    if (pr) body.priorite = parseInt(pr, 10);
-    await api("/api/radar", { method: "POST", body: JSON.stringify(body) });
-    e.target.reset();
-    await loadPokedexOptions();
-    await loadRadar();
-  } catch (err) {
-    alert(err.message);
-  }
-};
 
 // Vendus
 async function loadVendus() {
@@ -812,6 +1069,7 @@ $("#form-vente").onsubmit = async (e) => {
 };
 
 // Init
+initUniversalSearchBars();
 loadDashboard();
 loadPokedexOptions().catch(() => {});
 

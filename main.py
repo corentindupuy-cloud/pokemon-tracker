@@ -22,10 +22,12 @@ from fastapi.staticfiles import StaticFiles
 from database import get_supabase
 from models import (
     LANGUES_POKEDEX,
+    DashboardFullOut,
     DashboardKPIs,
     PokedexCreate,
     PokedexOut,
     DashboardCharts,
+    SearchResultOut,
     RadarCreate,
     RadarOut,
     RadarUpdate,
@@ -39,6 +41,7 @@ from models import (
 from services import (
     enrich_stock_row,
     get_dashboard_charts,
+    get_dashboard_extras,
     get_dashboard_kpis,
     propagate_radar_urgency,
     scrape_all_cards,
@@ -397,20 +400,40 @@ async def scrape_all():
     return await scrape_all_cards()
 
 
+@app.get("/api/search", response_model=list[SearchResultOut])
+async def search_cards(q: str = Query(..., min_length=2)):
+    """Recherche CardMarket par nom (10 premiers résultats)."""
+    from search import search_cardmarket
+
+    return await search_cardmarket(q, limit=10)
+
+
 # ─── Stock ─────────────────────────────────────────────────────────────────
 
 @app.get("/api/stock")
 async def list_stock(statut: Optional[str] = None):
     sb = get_supabase()
-    q = sb.table("stock").select("*, pokedex(nom, extension, image_url, prix_actuel)")
+    q = sb.table("stock").select(
+        "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
+        "prix_moyen_ebay, nb_ventes_ebay, ebay_url)"
+    )
     if statut:
         q = q.eq("statut", statut)
     rows = q.order("created_at", desc=True).execute().data or []
     out = []
     for r in rows:
         p = r.pop("pokedex", None) or {}
-        row = {**r, "nom": p.get("nom"), "extension": p.get("extension"),
-               "image_url": p.get("image_url"), "prix_actuel": p.get("prix_actuel")}
+        row = {
+            **r,
+            "nom": p.get("nom"),
+            "extension": p.get("extension"),
+            "image_url": p.get("image_url"),
+            "prix_actuel": p.get("prix_actuel"),
+            "langue": p.get("langue"),
+            "prix_moyen_ebay": p.get("prix_moyen_ebay"),
+            "nb_ventes_ebay": p.get("nb_ventes_ebay"),
+            "ebay_url": p.get("ebay_url"),
+        }
         out.append(enrich_stock_row(row))
     return out
 
@@ -472,7 +495,10 @@ async def list_radar():
     sb = get_supabase()
     rows = (
         sb.table("radar")
-        .select("*, pokedex(nom, extension, image_url, prix_actuel)")
+        .select(
+            "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
+            "prix_moyen_ebay, nb_ventes_ebay)"
+        )
         .order("created_at", desc=True)
         .execute()
         .data
@@ -482,8 +508,16 @@ async def list_radar():
     out = []
     for r in rows:
         p = r.pop("pokedex", None) or {}
-        out.append({**r, "nom": p.get("nom"), "extension": p.get("extension"),
-                    "image_url": p.get("image_url"), "prix_actuel": p.get("prix_actuel")})
+        out.append({
+            **r,
+            "nom": p.get("nom"),
+            "extension": p.get("extension"),
+            "image_url": p.get("image_url"),
+            "prix_actuel": p.get("prix_actuel"),
+            "langue": p.get("langue"),
+            "prix_moyen_ebay": p.get("prix_moyen_ebay"),
+            "nb_ventes_ebay": p.get("nb_ventes_ebay"),
+        })
     return out
 
 
@@ -642,9 +676,11 @@ async def list_ventes():
     return out
 
 
-@app.get("/api/dashboard", response_model=DashboardKPIs)
+@app.get("/api/dashboard", response_model=DashboardFullOut)
 async def dashboard():
-    return get_dashboard_kpis()
+    kpis = get_dashboard_kpis()
+    extras = get_dashboard_extras()
+    return {**kpis, **extras}
 
 
 @app.get("/api/dashboard/charts", response_model=DashboardCharts)

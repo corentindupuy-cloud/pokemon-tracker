@@ -278,6 +278,91 @@ def enrich_stock_row(row: dict) -> dict:
     return row
 
 
+def _ebay_opportunity_pct(prix_cm: Optional[float], prix_ebay: Optional[float]) -> Optional[float]:
+    if prix_cm is None or prix_ebay is None or prix_cm <= 0:
+        return None
+    return round(((prix_ebay / prix_cm) - 1) * 100, 1)
+
+
+def get_dashboard_extras() -> dict[str, Any]:
+    """Opportunités radar + stock, top marges latentes."""
+    sb = get_supabase()
+    opps: list[dict[str, Any]] = []
+
+    radar_rows = (
+        sb.table("radar")
+        .select("id, pokedex_id, prix_cible, statut, pokedex(nom, extension, prix_actuel)")
+        .eq("statut", "Actif")
+        .execute()
+        .data
+        or []
+    )
+    for r in radar_rows:
+        p = r.get("pokedex") or {}
+        prix = p.get("prix_actuel")
+        cible = r.get("prix_cible")
+        if prix is not None and cible is not None and float(prix) <= float(cible):
+            opps.append(
+                {
+                    "type": "radar",
+                    "nom": p.get("nom") or "—",
+                    "extension": p.get("extension"),
+                    "score": float(cible) - float(prix),
+                    "detail": f"CM {float(prix):.2f}€ ≤ cible {float(cible):.2f}€",
+                    "pokedex_id": r.get("pokedex_id"),
+                }
+            )
+
+    stock_rows = (
+        sb.table("stock")
+        .select(
+            "id, pokedex_id, prix_achat, "
+            "pokedex(nom, extension, prix_actuel, prix_moyen_ebay)"
+        )
+        .in_("statut", ["En stock", "En vente"])
+        .execute()
+        .data
+        or []
+    )
+    top_marges: list[dict[str, Any]] = []
+    for s in stock_rows:
+        p = s.get("pokedex") or {}
+        cm = p.get("prix_actuel")
+        ebay = p.get("prix_moyen_ebay")
+        achat = s.get("prix_achat")
+        pct = _ebay_opportunity_pct(
+            float(cm) if cm is not None else None,
+            float(ebay) if ebay is not None else None,
+        )
+        if pct is not None and pct >= 30:
+            opps.append(
+                {
+                    "type": "stock",
+                    "nom": p.get("nom") or "—",
+                    "extension": p.get("extension"),
+                    "score": pct,
+                    "detail": f"Marge eBay +{pct}% vs CM",
+                    "pokedex_id": s.get("pokedex_id"),
+                }
+            )
+        if achat is not None and cm is not None:
+            marge = float(cm) - float(achat)
+            top_marges.append(
+                {
+                    "nom": p.get("nom"),
+                    "extension": p.get("extension"),
+                    "marge_latente": round(marge, 2),
+                    "prix_achat": float(achat),
+                    "prix_actuel": float(cm),
+                }
+            )
+
+    top_marges.sort(key=lambda x: x.get("marge_latente") or 0, reverse=True)
+    opps.sort(key=lambda x: x.get("score") or 0, reverse=True)
+
+    return {"opportunities": opps[:20], "top_marges": top_marges[:5]}
+
+
 def get_dashboard_charts() -> dict[str, Any]:
     """Séries temporelles : valeur stock (historique) + CA par jour."""
     from collections import defaultdict

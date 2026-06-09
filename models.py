@@ -27,13 +27,23 @@ class PokedexCreate(BaseModel):
     ebay_url: Optional[str] = None
 
 
+class SearchResultOut(BaseModel):
+    nom: str
+    extension: str = ""
+    image_url: Optional[str] = None
+    prix_actuel: Optional[float] = None
+    url_cardmarket: str
+
+
 class PokedexOut(PokedexBase):
     id: UUID
     prix_moyen_ebay: Optional[float] = None
+    prix_median_ebay: Optional[float] = None
     prix_min_ebay: Optional[float] = None
     prix_max_ebay: Optional[float] = None
     nb_ventes_ebay: Optional[int] = None
     date_maj_ebay: Optional[datetime] = None
+    date_vente_plus_recente: Optional[datetime] = None
     langue: str = "FR"
     ebay_keyword: Optional[str] = None
     ebay_url: Optional[str] = None
@@ -86,8 +96,10 @@ class RadarCreate(BaseModel):
     prix_cible: float
     priorite: Optional[int] = Field(None, ge=1, le=5, description="1 = priorité max")
     source_potentielle: Optional[str] = None
+    marge_minimum: Optional[float] = None
     statut: str = "Actif"
     notes: Optional[str] = None
+    alerte_active: bool = False
 
 
 class RadarUpdate(BaseModel):
@@ -95,6 +107,8 @@ class RadarUpdate(BaseModel):
     prix_cible: Optional[float] = None
     statut: Optional[str] = None
     notes: Optional[str] = None
+    marge_minimum: Optional[float] = None
+    alerte_active: Optional[bool] = None
 
 
 class RadarOut(BaseModel):
@@ -103,9 +117,11 @@ class RadarOut(BaseModel):
     prix_cible: float
     priorite: Optional[int] = None
     source_potentielle: Optional[str] = None
+    marge_minimum: Optional[float] = None
     urgence: Optional[str] = None
     statut: str = "Actif"
     notes: Optional[str] = None
+    alerte_active: bool = False
     created_at: Optional[datetime] = None
     nom: Optional[str] = None
     extension: Optional[str] = None
@@ -165,6 +181,20 @@ class DashboardKPIs(BaseModel):
     nb_en_stock: int = 0
     nb_radar: int = 0
     nb_vendus: int = 0
+
+
+class OpportunityItem(BaseModel):
+    type: str
+    nom: str
+    extension: Optional[str] = None
+    score: float = 0
+    detail: str = ""
+    pokedex_id: Optional[str] = None
+
+
+class DashboardFullOut(DashboardKPIs):
+    opportunities: list[OpportunityItem] = []
+    top_marges: list[dict] = []
 
 
 class ScrapeResultOut(BaseModel):

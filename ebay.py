@@ -21,6 +21,7 @@ EBAY_CATEGORY_POKEMON = "183454"
 EBAY_CACHE_HOURS = 6
 EBAY_SLEEP_S = 2.0
 EBAY_AVG_SAMPLE = 10
+EBAY_SOLD_DAYS = 60
 
 _BROWSER_HEADERS = {
     "User-Agent": (
@@ -304,6 +305,8 @@ def build_search_url(
         "LH_Sold": "1",
         "LH_Complete": "1",
         "_sacat": category_id,
+        "LH_ItemCondition": "3",
+        "_sadis": str(EBAY_SOLD_DAYS),
     }
     if keywords:
         params["_nkw"] = keywords
@@ -472,6 +475,17 @@ async def fetch_sold_items(
 fetch_completed_items = fetch_sold_items
 
 
+def _median(values: list[float]) -> Optional[float]:
+    if not values:
+        return None
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    if n % 2:
+        return round(s[mid], 2)
+    return round((s[mid - 1] + s[mid]) / 2, 2)
+
+
 def compute_stats(prices: list[float]) -> tuple[Optional[float], Optional[float], Optional[float]]:
     if not prices:
         return None, None, None
@@ -490,6 +504,47 @@ def stats_from_sales(
     top = priced[:sample]
     avg, mn, mx = compute_stats(top)
     return avg, mn, mx, len(priced)
+
+
+def stats_from_sales_extended(
+    sales: list[EbaySale],
+    *,
+    sample: int = EBAY_AVG_SAMPLE,
+) -> dict[str, Any]:
+    """Stats 60j : moyenne, médiane, min, max, nb, date vente la plus récente."""
+    priced_sales = [
+        s for s in sales if s.prix_vente is not None and s.prix_vente > 0
+    ]
+    prices = [float(s.prix_vente) for s in priced_sales]
+    if not prices:
+        return {
+            "prix_moyen": None,
+            "prix_median": None,
+            "prix_min": None,
+            "prix_max": None,
+            "nb_ventes": 0,
+            "date_plus_recente": None,
+            "donnees_anciennes": False,
+        }
+
+    usable = prices[:sample]
+    avg, mn, mx = compute_stats(usable)
+    dated = [s for s in priced_sales if s.date_vente]
+    date_recent = max((s.date_vente for s in dated), default=None)
+    donnees_anciennes = False
+    if date_recent:
+        age_days = (datetime.now(timezone.utc) - date_recent).days
+        donnees_anciennes = age_days > EBAY_SOLD_DAYS
+
+    return {
+        "prix_moyen": avg,
+        "prix_median": _median(usable),
+        "prix_min": mn,
+        "prix_max": mx,
+        "nb_ventes": len(prices),
+        "date_plus_recente": date_recent.isoformat() if date_recent else None,
+        "donnees_anciennes": donnees_anciennes,
+    }
 
 
 def get_cached_sales(pokedex_id: str) -> Optional[list[dict[str, Any]]]:
@@ -566,22 +621,26 @@ async def sync_pokedex_sales(
         keywords = plan.keywords or ""
         if _should_skip_keywords(keywords):
             raise RuntimeError("Nom/extension insuffisants pour eBay")
-        all_sales = await fetch_sold_items(keywords=keywords, category_id=EBAY_CATEGORY_POKEMON)
+        all_sales = await fetch_sold_items(
+            keywords=keywords,
+            category_id=EBAY_CATEGORY_POKEMON,
+            days=EBAY_SOLD_DAYS,
+        )
     now = datetime.now(timezone.utc)
-    cutoff_30 = now - timedelta(days=30)
+    cutoff_60 = now - timedelta(days=EBAY_SOLD_DAYS)
     cutoff_7 = now - timedelta(days=7)
 
-    sales_30 = [s for s in all_sales if not s.date_vente or s.date_vente >= cutoff_30]
+    sales_60 = [s for s in all_sales if not s.date_vente or s.date_vente >= cutoff_60]
     sales_7 = [s for s in all_sales if s.date_vente and s.date_vente >= cutoff_7]
-    if not sales_30 and all_sales:
-        sales_30 = all_sales
+    if not sales_60 and all_sales:
+        sales_60 = all_sales
 
-    avg30, min30, max30, nb30 = stats_from_sales(sales_30)
+    stats60 = stats_from_sales_extended(sales_60)
     avg7, min7, max7, _ = stats_from_sales(sales_7)
 
     store_sales(
         pokedex_id=pokedex_id,
-        sales=sales_30,
+        sales=sales_60,
         nb_ventes_7j=len(sales_7),
         prix_moyen_7j=avg7,
         prix_min_7j=min7,
@@ -591,10 +650,12 @@ async def sync_pokedex_sales(
     sb = get_supabase()
     sb.table("pokedex").update(
         {
-            "prix_moyen_ebay": avg30,
-            "prix_min_ebay": min30,
-            "prix_max_ebay": max30,
-            "nb_ventes_ebay": nb30,
+            "prix_moyen_ebay": stats60["prix_moyen"],
+            "prix_median_ebay": stats60["prix_median"],
+            "prix_min_ebay": stats60["prix_min"],
+            "prix_max_ebay": stats60["prix_max"],
+            "nb_ventes_ebay": stats60["nb_ventes"],
+            "date_vente_plus_recente": stats60["date_plus_recente"],
             "date_maj_ebay": now.isoformat(),
         }
     ).eq("id", pokedex_id).execute()
@@ -610,13 +671,14 @@ async def sync_pokedex_sales(
                 "categorie": s.categorie,
                 "url_ebay": s.url_ebay,
             }
-            for s in sales_30
+            for s in sales_60
         ],
+        "stats_60j": stats60,
         "stats_30j": {
-            "prix_moyen": avg30,
-            "prix_min": min30,
-            "prix_max": max30,
-            "nb_ventes": nb30,
+            "prix_moyen": stats60["prix_moyen"],
+            "prix_min": stats60["prix_min"],
+            "prix_max": stats60["prix_max"],
+            "nb_ventes": stats60["nb_ventes"],
         },
         "stats_7j": {
             "prix_moyen": avg7,
