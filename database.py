@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
 from dotenv import load_dotenv
 from supabase import Client, create_client
 
-load_dotenv()
+_ROOT = Path(__file__).resolve().parent
+load_dotenv(_ROOT / ".env", override=True)
 
 
 @lru_cache

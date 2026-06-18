@@ -907,3 +907,49 @@ tr:hover td { background: rgba(59, 130, 246, 0.08); }
   table { font-size: 0.8rem; }
   .thumb, .thumb-placeholder { width: 45px; height: 60px; }
 }
+
+.chart-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.chart-card-head h3 {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.market-prices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 12rem;
+  font-size: 0.82rem;
+}
+
+.market-price-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+  align-items: baseline;
+}
+
+.market-price-row span:first-child {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.market-price-ref {
+  margin-top: 0.15rem;
+  padding-top: 0.25rem;
+  border-top: 1px solid var(--border);
+}
+
+.market-prices-col {
+  min-width: 14rem;
+}

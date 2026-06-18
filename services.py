@@ -9,6 +9,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from database import get_supabase
+from pricing import compute_reference_median, deal_score_label
 from scraper import EbaySoldData, scrape_cardmarket_url, scrape_ebay_sold, scrape_multiple
 
 logger = logging.getLogger(__name__)
@@ -79,6 +80,67 @@ def append_historique(
             "date": date.today().isoformat(),
         }
     ).execute()
+
+
+def append_historique_market(
+    pokedex_id: str,
+    *,
+    prix_cm: Optional[float],
+    prix_ebay_actif: Optional[float],
+    prix_vinted: Optional[float],
+    prix_mediane: Optional[float],
+    tendance_7j: Optional[float],
+    old_price: Optional[float],
+) -> None:
+    """Historique du jour avec les 3 sources + médiane."""
+    if prix_cm is None and prix_ebay_actif is None and prix_vinted is None:
+        return
+
+    sb = get_supabase()
+    today = date.today().isoformat()
+    ref_prix = prix_cm if prix_cm is not None else prix_mediane
+    if ref_prix is None:
+        return
+
+    j0 = _first_price(pokedex_id)
+    var_j1_eur = var_j1_pct = var_j0_eur = var_j0_pct = None
+    if old_price is not None:
+        var_j1_eur = float(ref_prix - old_price)
+        var_j1_pct = float((var_j1_eur / old_price) * 100) if old_price else None
+    if j0 is not None and j0 != 0:
+        var_j0_eur = float(ref_prix - j0)
+        var_j0_pct = float((var_j0_eur / j0) * 100)
+    elif j0 is None:
+        var_j0_eur = 0.0
+        var_j0_pct = 0.0
+
+    payload = {
+        "prix": float(ref_prix),
+        "tendance_7j": float(tendance_7j) if tendance_7j is not None else None,
+        "variation_j1_eur": var_j1_eur,
+        "variation_j1_pct": var_j1_pct,
+        "variation_j0_eur": var_j0_eur,
+        "variation_j0_pct": var_j0_pct,
+        "prix_ebay_actif": prix_ebay_actif,
+        "prix_vinted": prix_vinted,
+        "prix_mediane": prix_mediane,
+    }
+
+    existing = (
+        sb.table("historique_prix")
+        .select("id")
+        .eq("pokedex_id", pokedex_id)
+        .eq("date", today)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if existing:
+        sb.table("historique_prix").update(payload).eq("id", existing[0]["id"]).execute()
+    else:
+        sb.table("historique_prix").insert(
+            {"pokedex_id": pokedex_id, "date": today, **payload}
+        ).execute()
 
 
 def _ebay_update_fields(ebay: EbaySoldData) -> dict[str, Any]:
@@ -261,8 +323,12 @@ async def propagate_radar_urgency() -> None:
     for r in radar:
         if not r.get("pokedex_id"):
             continue
-        p = sb.table("pokedex").select("prix_actuel").eq("id", r["pokedex_id"]).single().execute()
-        prix = p.data.get("prix_actuel") if p.data else None
+        p = sb.table("pokedex").select(
+            "prix_actuel, prix_reference_mediane, prix_actif_ebay, prix_moyen_vinted"
+        ).eq("id", r["pokedex_id"]).single().execute()
+        prix = None
+        if p.data:
+            prix = p.data.get("prix_reference_mediane") or p.data.get("prix_actuel")
         urgence = compute_urgence(
             float(prix) if prix is not None else None,
             float(r["prix_cible"]),
@@ -271,17 +337,36 @@ async def propagate_radar_urgency() -> None:
 
 
 def enrich_stock_row(row: dict) -> dict:
-    if row.get("prix_achat") and row.get("prix_actuel"):
-        row["marge_latente"] = float(row["prix_actuel"]) - float(row["prix_achat"])
+    ref = row.get("prix_reference_mediane") or row.get("prix_actuel")
+    if row.get("prix_achat") and ref is not None:
+        row["marge_latente"] = float(ref) - float(row["prix_achat"])
     else:
         row["marge_latente"] = None
     return row
 
 
-def _ebay_opportunity_pct(prix_cm: Optional[float], prix_ebay: Optional[float]) -> Optional[float]:
-    if prix_cm is None or prix_ebay is None or prix_cm <= 0:
-        return None
-    return round(((prix_ebay / prix_cm) - 1) * 100, 1)
+def _pokedex_price_maps(pokedex: list[dict]) -> dict[str, dict[str, Optional[float]]]:
+    out: dict[str, dict[str, Optional[float]]] = {}
+    for p in pokedex:
+        pid = p["id"]
+        cm = p.get("prix_actuel")
+        ebay = p.get("prix_actif_ebay")
+        vinted = p.get("prix_moyen_vinted")
+        median = p.get("prix_reference_mediane")
+        if median is None:
+            median = compute_reference_median(
+                float(cm) if cm is not None else None,
+                float(ebay) if ebay is not None else None,
+                float(vinted) if vinted is not None else None,
+            )
+        out[pid] = {
+            "cm": float(cm) if cm is not None else None,
+            "ebay": float(ebay) if ebay is not None else None,
+            "vinted": float(vinted) if vinted is not None else None,
+            "median": float(median) if median is not None else None,
+        }
+    return out
+
 
 
 def get_dashboard_extras() -> dict[str, Any]:
@@ -291,7 +376,10 @@ def get_dashboard_extras() -> dict[str, Any]:
 
     radar_rows = (
         sb.table("radar")
-        .select("id, pokedex_id, prix_cible, statut, pokedex(nom, extension, prix_actuel)")
+        .select(
+            "id, pokedex_id, prix_cible, statut, "
+            "pokedex(nom, extension, prix_actuel, prix_reference_mediane)"
+        )
         .eq("statut", "Actif")
         .execute()
         .data
@@ -299,7 +387,7 @@ def get_dashboard_extras() -> dict[str, Any]:
     )
     for r in radar_rows:
         p = r.get("pokedex") or {}
-        prix = p.get("prix_actuel")
+        prix = p.get("prix_reference_mediane") or p.get("prix_actuel")
         cible = r.get("prix_cible")
         if prix is not None and cible is not None and float(prix) <= float(cible):
             opps.append(
@@ -308,7 +396,7 @@ def get_dashboard_extras() -> dict[str, Any]:
                     "nom": p.get("nom") or "—",
                     "extension": p.get("extension"),
                     "score": float(cible) - float(prix),
-                    "detail": f"CM {float(prix):.2f}€ ≤ cible {float(cible):.2f}€",
+                    "detail": f"Réf. {float(prix):.2f}€ ≤ cible {float(cible):.2f}€",
                     "pokedex_id": r.get("pokedex_id"),
                 }
             )
@@ -317,7 +405,7 @@ def get_dashboard_extras() -> dict[str, Any]:
         sb.table("stock")
         .select(
             "id, pokedex_id, prix_achat, "
-            "pokedex(nom, extension, prix_actuel, prix_moyen_ebay)"
+            "pokedex(nom, extension, prix_actuel, prix_actif_ebay, prix_moyen_vinted, prix_reference_mediane)"
         )
         .in_("statut", ["En stock", "En vente"])
         .execute()
@@ -327,33 +415,33 @@ def get_dashboard_extras() -> dict[str, Any]:
     top_marges: list[dict[str, Any]] = []
     for s in stock_rows:
         p = s.get("pokedex") or {}
-        cm = p.get("prix_actuel")
-        ebay = p.get("prix_moyen_ebay")
+        ref = p.get("prix_reference_mediane") or p.get("prix_actuel")
         achat = s.get("prix_achat")
-        pct = _ebay_opportunity_pct(
-            float(cm) if cm is not None else None,
-            float(ebay) if ebay is not None else None,
+        score = deal_score_label(
+            float(achat) if achat is not None else None,
+            float(ref) if ref is not None else None,
         )
-        if pct is not None and pct >= 30:
+        if score.get("cls") == "score-good":
             opps.append(
                 {
                     "type": "stock",
                     "nom": p.get("nom") or "—",
                     "extension": p.get("extension"),
-                    "score": pct,
-                    "detail": f"Marge eBay +{pct}% vs CM",
+                    "score": score.get("pct") or 0,
+                    "detail": f"{score['emoji']} {score['label']} (réf. {float(ref):.2f}€)",
                     "pokedex_id": s.get("pokedex_id"),
                 }
             )
-        if achat is not None and cm is not None:
-            marge = float(cm) - float(achat)
+        if achat is not None and ref is not None:
+            marge = float(ref) - float(achat)
             top_marges.append(
                 {
                     "nom": p.get("nom"),
                     "extension": p.get("extension"),
                     "marge_latente": round(marge, 2),
                     "prix_achat": float(achat),
-                    "prix_actuel": float(cm),
+                    "prix_reference": float(ref),
+                    "prix_actuel": p.get("prix_actuel"),
                 }
             )
 
@@ -387,49 +475,76 @@ def get_dashboard_charts() -> dict[str, Any]:
 
     hist = (
         sb.table("historique_prix")
-        .select("pokedex_id, prix, date")
+        .select("pokedex_id, prix, prix_ebay_actif, prix_vinted, prix_mediane, date")
         .order("date")
         .execute()
         .data
         or []
     )
-    by_date: dict[str, dict[str, float]] = defaultdict(dict)
+    by_date_cm: dict[str, dict[str, float]] = defaultdict(dict)
+    by_date_ebay: dict[str, dict[str, float]] = defaultdict(dict)
+    by_date_median: dict[str, dict[str, float]] = defaultdict(dict)
     for h in hist:
         pid = h.get("pokedex_id")
         if pid not in pokedex_ids:
             continue
         d = str(h.get("date") or "")[:10]
-        if d:
-            by_date[d][pid] = float(h.get("prix") or 0)
+        if not d:
+            continue
+        if h.get("prix") is not None:
+            by_date_cm[d][pid] = float(h["prix"])
+        if h.get("prix_ebay_actif") is not None:
+            by_date_ebay[d][pid] = float(h["prix_ebay_actif"])
+        med = h.get("prix_mediane")
+        if med is not None:
+            by_date_median[d][pid] = float(med)
+        elif h.get("prix") is not None:
+            by_date_median[d][pid] = float(h["prix"])
 
-    all_dates = sorted(set(by_date.keys()) | set(ca_by_date.keys()))
+    all_dates = sorted(set(by_date_cm.keys()) | set(by_date_ebay.keys()) | set(by_date_median.keys()) | set(ca_by_date.keys()))
+
+    def _series(by_date: dict[str, dict[str, float]], fallback_val: float) -> tuple[list[str], list[float]]:
+        if not all_dates:
+            today = date.today().isoformat()
+            return [today], [fallback_val]
+        last: dict[str, float] = {}
+        series: list[float] = []
+        for d in all_dates:
+            last.update(by_date.get(d, {}))
+            val = sum(last.get(pid, 0) for pid in pokedex_ids if pid in last)
+            series.append(round(val, 2))
+        return all_dates, series
+
+    kpis = get_dashboard_kpis()
+    labels, valeur_cm = _series(by_date_cm, kpis.get("valeur_stock_cm", 0))
+    _, valeur_ebay = _series(by_date_ebay, kpis.get("valeur_stock_ebay", 0))
+    _, valeur_mediane = _series(by_date_median, kpis.get("valeur_stock", 0))
+
     if not all_dates:
         today = date.today().isoformat()
-        kpis = get_dashboard_kpis()
         return {
             "labels": [today],
             "valeur_stock": [kpis["valeur_stock"]],
+            "valeur_stock_cm": [kpis.get("valeur_stock_cm", 0)],
+            "valeur_stock_ebay": [kpis.get("valeur_stock_ebay", 0)],
+            "valeur_stock_mediane": [kpis["valeur_stock"]],
             "chiffre_affaires": [ca_by_date.get(today, 0)],
         }
 
-    last_prices: dict[str, float] = {}
-    valeur_series: list[float] = []
-    ca_series: list[float] = []
-    for d in all_dates:
-        last_prices.update(by_date.get(d, {}))
-        val = sum(last_prices.get(pid, 0) for pid in pokedex_ids if pid in last_prices)
-        valeur_series.append(round(val, 2))
-        ca_series.append(round(ca_by_date.get(d, 0), 2))
-
-    kpis = get_dashboard_kpis()
-    if date.today().isoformat() not in all_dates:
-        all_dates.append(date.today().isoformat())
-        valeur_series.append(kpis["valeur_stock"])
+    ca_series = [round(ca_by_date.get(d, 0), 2) for d in labels]
+    if date.today().isoformat() not in labels:
+        labels = labels + [date.today().isoformat()]
+        valeur_cm.append(kpis.get("valeur_stock_cm", 0))
+        valeur_ebay.append(kpis.get("valeur_stock_ebay", 0))
+        valeur_mediane.append(kpis["valeur_stock"])
         ca_series.append(ca_by_date.get(date.today().isoformat(), 0))
 
     return {
-        "labels": all_dates,
-        "valeur_stock": valeur_series,
+        "labels": labels,
+        "valeur_stock": valeur_mediane,
+        "valeur_stock_cm": valeur_cm,
+        "valeur_stock_ebay": valeur_ebay,
+        "valeur_stock_mediane": valeur_mediane,
         "chiffre_affaires": ca_series,
     }
 
@@ -444,27 +559,44 @@ def get_dashboard_kpis() -> dict[str, Any]:
         or []
     )
     ventes = sb.table("ventes").select("prix_vente, frais_plateforme, stock_id").execute().data or []
-    pokedex = sb.table("pokedex").select("id, prix_actuel").execute().data or []
-    prix_map = {p["id"]: p.get("prix_actuel") for p in pokedex}
+    pokedex = (
+        sb.table("pokedex")
+        .select(
+            "id, prix_actuel, prix_actif_ebay, prix_moyen_vinted, prix_reference_mediane"
+        )
+        .execute()
+        .data
+        or []
+    )
+    price_maps = _pokedex_price_maps(pokedex)
+
+    def _stock_value(key: str) -> float:
+        total = 0.0
+        for s in stock:
+            if s.get("statut") not in ("En stock", "En vente") or not s.get("pokedex_id"):
+                continue
+            val = price_maps.get(s["pokedex_id"], {}).get(key)
+            if val is not None:
+                total += val * int(s.get("quantite") or 1)
+        return total
 
     capital = sum(
         float(s["prix_achat"] or 0) * int(s.get("quantite") or 1)
         for s in stock
         if s.get("statut") in ("En stock", "En vente")
     )
-    valeur = sum(
-        float(prix_map.get(s["pokedex_id"]) or 0) * int(s.get("quantite") or 1)
-        for s in stock
-        if s.get("statut") in ("En stock", "En vente") and s.get("pokedex_id")
-    )
+    valeur_cm = round(_stock_value("cm"), 2)
+    valeur_ebay = round(_stock_value("ebay"), 2)
+    valeur_vinted = round(_stock_value("vinted"), 2)
+    valeur = round(_stock_value("median"), 2)
     marge_latente = sum(
-        (float(prix_map.get(s["pokedex_id"]) or 0) - float(s["prix_achat"] or 0))
+        (float(price_maps.get(s["pokedex_id"], {}).get("median") or 0) - float(s["prix_achat"] or 0))
         * int(s.get("quantite") or 1)
         for s in stock
         if s.get("statut") in ("En stock", "En vente")
         and s.get("pokedex_id")
         and s.get("prix_achat") is not None
-        and prix_map.get(s["pokedex_id"]) is not None
+        and price_maps.get(s["pokedex_id"], {}).get("median") is not None
     )
     ca = sum(float(v["prix_vente"] or 0) for v in ventes)
     frais = sum(float(v.get("frais_plateforme") or 0) for v in ventes)
@@ -480,6 +612,9 @@ def get_dashboard_kpis() -> dict[str, Any]:
     return {
         "capital_investi": round(capital, 2),
         "valeur_stock": round(valeur, 2),
+        "valeur_stock_cm": valeur_cm,
+        "valeur_stock_ebay": valeur_ebay,
+        "valeur_stock_vinted": valeur_vinted,
         "marge_latente_totale": round(marge_latente, 2),
         "ca_total": round(ca, 2),
         "benefice_net": round(benefice, 2),

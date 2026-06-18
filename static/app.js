@@ -27,19 +27,63 @@ let searchTimers = new Map();
 let trendingCat = "all";
 let chartStock = null;
 let chartCa = null;
+let chartView = "mediane";
+let lastChartData = null;
+
+function prixReference(row) {
+  if (row.prix_reference_mediane != null) return row.prix_reference_mediane;
+  const prices = [row.prix_actuel, row.prix_actif_ebay, row.prix_moyen_vinted]
+    .filter((v) => v != null && v > 0)
+    .sort((a, b) => a - b);
+  if (!prices.length) return null;
+  const mid = Math.floor(prices.length / 2);
+  return prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+}
+
+function marketPricesBlock(row) {
+  const tend = row.tendance_7j != null ? ` <small class="muted">(7j: ${fmtEur(row.tendance_7j)})</small>` : "";
+  const cm = row.prix_actuel != null ? fmtEur(row.prix_actuel) : "—";
+  const ebay = row.prix_actif_ebay != null ? fmtEur(row.prix_actif_ebay) : "—";
+  const ebayNb = row.nb_annonces_ebay_actif ?? 0;
+  const vinted = row.prix_moyen_vinted != null ? fmtEur(row.prix_moyen_vinted) : "—";
+  const vintedNb = row.nb_annonces_vinted ?? 0;
+  const ref = prixReference(row);
+  const refLine = ref != null
+    ? `<div class="market-price-row market-price-ref"><span>📐 Réf. médiane</span><span><strong>${fmtEur(ref)}</strong></span></div>`
+    : "";
+  return `<div class="market-prices">
+    <div class="market-price-row"><span>📊 CardMarket</span><span>${cm}${tend}</span></div>
+    <div class="market-price-row"><span>🛒 eBay actif</span><span>${ebay} <small class="muted">(${ebayNb})</small></span></div>
+    <div class="market-price-row"><span>👗 Vinted</span><span>${vinted} <small class="muted">(${vintedNb})</small></span></div>
+    ${refLine}
+  </div>`;
+}
 
 function opportunityScore(row) {
-  const cm = row.prix_actuel;
-  const ebay = row.prix_moyen_ebay;
-  if (ebay == null || cm == null || cm <= 0) {
+  const ref = prixReference(row);
+  const achat = row.prix_achat;
+  if (ref == null || ref <= 0) {
     return { emoji: "⚪", label: "Pas de données", pct: null, cls: "score-none" };
   }
-  const ratio = ebay / cm;
-  const pct = Math.round((ratio - 1) * 100);
-  if (ratio > 1.2) return { emoji: "🟢", label: `Opportunité (+${pct}%)`, pct, cls: "score-good" };
-  if (ratio > 1.1) return { emoji: "🟡", label: `Correct (+${pct}%)`, pct, cls: "score-ok" };
-  if (ratio < 0.9) return { emoji: "🔴", label: `Surcotée (${pct}%)`, pct, cls: "score-bad" };
-  return { emoji: "⚪", label: "Neutre", pct, cls: "score-none" };
+  if (achat != null) {
+    const ratio = achat / ref;
+    const pct = Math.round((1 - ratio) * 100);
+    if (ratio < 0.8) return { emoji: "🟢", label: "Excellente affaire", pct, cls: "score-good" };
+    if (ratio < 0.9) return { emoji: "🟡", label: "Bonne affaire", pct, cls: "score-ok" };
+    if (ratio > 1) return { emoji: "🔴", label: "Prix élevé", pct, cls: "score-bad" };
+    return { emoji: "⚪", label: "Neutre", pct, cls: "score-none" };
+  }
+  const cm = row.prix_actuel;
+  const ebay = row.prix_actif_ebay;
+  const vinted = row.prix_moyen_vinted;
+  if (ebay != null && cm != null && cm > 0) {
+    const pct = Math.round((ebay / cm - 1) * 100);
+    if (pct > 20) return { emoji: "🟢", label: `Opportunité (+${pct}%)`, pct, cls: "score-good" };
+  }
+  if (vinted != null && ref > 0 && vinted < ref * 0.85) {
+    return { emoji: "🟢", label: "Vinted bas", pct: null, cls: "score-good" };
+  }
+  return { emoji: "⚪", label: "Neutre", pct: null, cls: "score-none" };
 }
 
 function openAppModal(html) {
@@ -726,8 +770,11 @@ async function loadDashboard() {
     const margeCls = kpiMargeClass(marge);
     $("#kpi-grid").innerHTML = `
     <div class="kpi-card"><div class="label">Capital investi</div><div class="value">${fmtEur(k.capital_investi)}</div></div>
-    <div class="kpi-card"><div class="label">Valeur stock</div><div class="value">${fmtEur(k.valeur_stock)}</div></div>
-    <div class="kpi-card kpi-card-highlight"><div class="label">Marge latente (cumul)</div><div class="value ${margeCls}">${fmtEur(marge)}</div></div>
+    <div class="kpi-card kpi-card-highlight"><div class="label">Valeur stock (médiane)</div><div class="value">${fmtEur(k.valeur_stock)}</div></div>
+    <div class="kpi-card"><div class="label">Valeur CM</div><div class="value">${fmtEur(k.valeur_stock_cm)}</div></div>
+    <div class="kpi-card"><div class="label">Valeur eBay actif</div><div class="value">${fmtEur(k.valeur_stock_ebay)}</div></div>
+    <div class="kpi-card"><div class="label">Valeur Vinted</div><div class="value">${fmtEur(k.valeur_stock_vinted)}</div></div>
+    <div class="kpi-card kpi-card-highlight"><div class="label">Marge latente (réf.)</div><div class="value ${margeCls}">${fmtEur(marge)}</div></div>
     <div class="kpi-card"><div class="label">CA total</div><div class="value">${fmtEur(k.ca_total)}</div></div>
     <div class="kpi-card"><div class="label">Bénéfice net</div><div class="value">${fmtEur(k.benefice_net)}</div></div>
     <div class="kpi-card"><div class="label">Marge moyenne</div><div class="value">${k.marge_moyenne_pct}%</div></div>
@@ -748,11 +795,11 @@ async function loadDashboard() {
 
     const tops = k.top_marges || [];
     $("#dash-top-marges").innerHTML = tops.length
-      ? `<table class="data-table"><thead><tr><th>Carte</th><th>Achat</th><th>CM</th><th>Marge lat.</th></tr></thead><tbody>
+      ? `<table class="data-table"><thead><tr><th>Carte</th><th>Achat</th><th>Réf.</th><th>Marge lat.</th></tr></thead><tbody>
         ${tops.map((t) => `<tr>
           <td>${escapeAttr(displayNom(t.nom))}<br><small class="muted">${escapeAttr(t.extension || "")}</small></td>
           <td>${fmtEur(t.prix_achat)}</td>
-          <td>${fmtEur(t.prix_actuel)}</td>
+          <td>${fmtEur(t.prix_reference ?? t.prix_actuel)}</td>
           <td class="marge-pos">${fmtEur(t.marge_latente)}</td>
         </tr>`).join("")}
         </tbody></table>`
@@ -772,7 +819,14 @@ async function loadDashboard() {
 
 function renderCharts(data) {
   if (typeof Chart === "undefined") return;
+  lastChartData = data;
   const labels = data.labels || [];
+  const viewMap = {
+    cm: { data: data.valeur_stock_cm || data.valeur_stock || [], label: "Valeur CM (€)", color: "#60a5fa", fill: "rgba(96, 165, 250, 0.15)" },
+    ebay: { data: data.valeur_stock_ebay || [], label: "Valeur eBay actif (€)", color: "#4ade80", fill: "rgba(74, 222, 128, 0.15)" },
+    mediane: { data: data.valeur_stock_mediane || data.valeur_stock || [], label: "Valeur médiane (€)", color: "#E8436A", fill: "rgba(232, 67, 106, 0.15)" },
+  };
+  const series = viewMap[chartView] || viewMap.mediane;
   const common = {
     responsive: true,
     maintainAspectRatio: true,
@@ -791,10 +845,10 @@ function renderCharts(data) {
     data: {
       labels,
       datasets: [{
-        label: "Valeur stock (€)",
-        data: data.valeur_stock || [],
-        borderColor: "#E8436A",
-        backgroundColor: "rgba(232, 67, 106, 0.15)",
+        label: series.label,
+        data: series.data,
+        borderColor: series.color,
+        backgroundColor: series.fill,
         fill: true,
         tension: 0.3,
       }],
@@ -823,7 +877,7 @@ async function loadPokedex() {
   const rows = await api("/api/pokedex");
   const tb = $("#pokedex-tbody");
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="8" class="empty">Aucune carte — recherchez un nom ci-dessus</td></tr>`;
+    tb.innerHTML = `<tr><td colspan="5" class="empty">Aucune carte — recherchez un nom ci-dessus</td></tr>`;
     return;
   }
   const renderRow = (r) => `
@@ -831,9 +885,7 @@ async function loadPokedex() {
       <td class="card-col">${cardCell(r)}</td>
       <td>${r.extension || "—"}</td>
       <td>${r.etat || "—"}</td>
-      <td>${fmtEur(r.prix_actuel)}</td>
-      <td>${ebayCell(r)}</td>
-      <td>${r.tendance_7j != null ? r.tendance_7j : "—"}</td>
+      <td class="market-prices-col">${marketPricesBlock(r)}</td>
       <td>${fmtDate(r.derniere_maj)}</td>
       <td class="actions-col">${pokedexActionsHtml(r.id)}</td>
     </tr>`;
@@ -846,8 +898,7 @@ async function loadPokedex() {
       <article class="item-card">
         <div class="item-card-head">${cardCell(r)}</div>
         <dl class="item-card-body">
-          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
-          <dt>eBay 60j</dt><dd>${ebayCell(r)}</dd>
+          <dt>Prix de marché</dt><dd>${marketPricesBlock(r)}</dd>
           <dt>Extension</dt><dd>${escapeAttr(r.extension || "—")}</dd>
         </dl>
         <div class="item-card-actions">${pokedexActionsHtml(r.id)}</div>
@@ -918,8 +969,7 @@ async function loadStock() {
       <td><strong>${escapeAttr(displayNom(r.nom))}</strong><br><small class="muted">${escapeAttr(r.extension || "")}</small></td>
       <td>${langueBadge(r.langue)}</td>
       <td>${fmtEur(r.prix_achat)}</td>
-      <td>${fmtEur(r.prix_actuel)}</td>
-      <td>${ebayCell(r)}</td>
+      <td class="market-prices-col">${marketPricesBlock(r)}</td>
       <td class="${mCls}">${m != null ? fmtEur(m) : "—"}</td>
       <td class="${score.cls}">${score.emoji} ${score.label}</td>
       <td><span class="badge badge-muted">${r.statut}</span></td>
@@ -935,8 +985,7 @@ async function loadStock() {
         <div class="item-card-head">${cardCell(r)}</div>
         <dl class="item-card-body">
           <dt>Achat</dt><dd>${fmtEur(r.prix_achat)}</dd>
-          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
-          <dt>eBay</dt><dd>${ebayCell(r)}</dd>
+          <dt>Prix de marché</dt><dd>${marketPricesBlock(r)}</dd>
           <dt>Score</dt><dd class="${score.cls}">${score.emoji} ${score.label}</dd>
         </dl>
         <div class="item-card-actions">
@@ -964,15 +1013,15 @@ async function loadRadar() {
     return;
   }
   tb.innerHTML = rows.map((r) => {
-    const margeEst = r.prix_actuel != null && r.prix_cible
-      ? Math.round(((r.prix_actuel - r.prix_cible) / r.prix_cible) * 100)
+    const ref = prixReference(r);
+    const margeEst = ref != null && r.prix_cible
+      ? Math.round(((ref - r.prix_cible) / r.prix_cible) * 100)
       : null;
     return `<tr>
       <td>${thumbHtml(r.image_url, displayNom(r.nom))}</td>
       <td><strong>${escapeAttr(displayNom(r.nom))}</strong></td>
       <td>${langueBadge(r.langue)}</td>
-      <td>${fmtEur(r.prix_actuel)}</td>
-      <td>${ebayCell(r)}</td>
+      <td class="market-prices-col">${marketPricesBlock(r)}</td>
       <td>${fmtEur(r.prix_cible)}</td>
       <td>${margeEst != null ? `${margeEst}%` : "—"}</td>
       <td>${urgenceBadge(r.urgence)}</td>
@@ -993,7 +1042,7 @@ async function loadRadar() {
         <div class="item-card-head">${cardCell(r)}</div>
         <dl class="item-card-body">
           <dt>Cible</dt><dd>${fmtEur(r.prix_cible)}</dd>
-          <dt>CM</dt><dd>${fmtEur(r.prix_actuel)}</dd>
+          <dt>Prix de marché</dt><dd>${marketPricesBlock(r)}</dd>
           <dt>Urgence</dt><dd>${urgenceBadge(r.urgence)}</dd>
         </dl>
         <div class="item-card-actions">
@@ -1072,6 +1121,15 @@ $("#form-vente").onsubmit = async (e) => {
 initUniversalSearchBars();
 loadDashboard();
 loadPokedexOptions().catch(() => {});
+
+$$(".chart-view-toggle .seg").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    $$(".chart-view-toggle .seg").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    chartView = btn.dataset.view || "mediane";
+    if (lastChartData) renderCharts(lastChartData);
+  });
+});
 
 // Tendances UI bindings
 $("#btn-refresh-trending")?.addEventListener("click", () => loadTendances());

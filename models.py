@@ -43,6 +43,15 @@ class PokedexOut(PokedexBase):
     prix_max_ebay: Optional[float] = None
     nb_ventes_ebay: Optional[int] = None
     date_maj_ebay: Optional[datetime] = None
+    prix_actif_ebay: Optional[float] = None
+    nb_annonces_ebay_actif: Optional[int] = None
+    date_maj_ebay_actif: Optional[datetime] = None
+    prix_moyen_vinted: Optional[float] = None
+    prix_min_vinted: Optional[float] = None
+    prix_max_vinted: Optional[float] = None
+    nb_annonces_vinted: Optional[int] = None
+    date_maj_vinted: Optional[datetime] = None
+    prix_reference_mediane: Optional[float] = None
     date_vente_plus_recente: Optional[datetime] = None
     langue: str = "FR"
     ebay_keyword: Optional[str] = None
@@ -88,6 +97,9 @@ class StockOut(BaseModel):
     extension: Optional[str] = None
     image_url: Optional[str] = None
     prix_actuel: Optional[float] = None
+    prix_reference_mediane: Optional[float] = None
+    prix_actif_ebay: Optional[float] = None
+    prix_moyen_vinted: Optional[float] = None
     marge_latente: Optional[float] = None
 
 
@@ -127,6 +139,9 @@ class RadarOut(BaseModel):
     extension: Optional[str] = None
     image_url: Optional[str] = None
     prix_actuel: Optional[float] = None
+    prix_reference_mediane: Optional[float] = None
+    prix_actif_ebay: Optional[float] = None
+    prix_moyen_vinted: Optional[float] = None
 
 
 class VenteCreate(BaseModel):
@@ -167,12 +182,18 @@ class HistoriqueOut(BaseModel):
 class DashboardCharts(BaseModel):
     labels: list[str]
     valeur_stock: list[float]
+    valeur_stock_cm: list[float] = []
+    valeur_stock_ebay: list[float] = []
+    valeur_stock_mediane: list[float] = []
     chiffre_affaires: list[float]
 
 
 class DashboardKPIs(BaseModel):
     capital_investi: float = 0
     valeur_stock: float = 0
+    valeur_stock_cm: float = 0
+    valeur_stock_ebay: float = 0
+    valeur_stock_vinted: float = 0
     marge_latente_totale: float = 0
     ca_total: float = 0
     benefice_net: float = 0
@@ -205,3 +226,54 @@ class ScrapeResultOut(BaseModel):
     prix_moyen_ebay: Optional[float] = None
     image_url: Optional[str] = None
     error: Optional[str] = None
+
+
+class EbayActiveListingOut(BaseModel):
+    titre: str
+    prix: Optional[float] = None
+    devise: str = "EUR"
+    url_ebay: Optional[str] = None
+    image_url: Optional[str] = None
+    item_id: Optional[str] = None
+    condition: Optional[str] = None
+
+
+class EbayActiveStatsOut(BaseModel):
+    prix_moyen: Optional[float] = None
+    prix_min: Optional[float] = None
+    prix_max: Optional[float] = None
+    nb_annonces: int = 0
+    source: str = "browse_active"
+
+
+class EbayActiveResponse(BaseModel):
+    keyword: str
+    stats: EbayActiveStatsOut
+    listings: list[EbayActiveListingOut]
+
+
+class VintedListingOut(BaseModel):
+    titre: str
+    prix: Optional[float] = None
+    url: Optional[str] = None
+
+
+class VintedStatsOut(BaseModel):
+    prix_moyen_vinted: Optional[float] = None
+    prix_min_vinted: Optional[float] = None
+    prix_max_vinted: Optional[float] = None
+    nb_annonces_vinted: int = 0
+
+
+class VintedActiveResponse(BaseModel):
+    keyword: str
+    langue: str = "FR"
+    stats: VintedStatsOut
+    listings: list[VintedListingOut]
+
+
+class MarketSyncResult(BaseModel):
+    success: bool
+    synced: int = 0
+    total: int = 0
+    errors: list[dict] = []

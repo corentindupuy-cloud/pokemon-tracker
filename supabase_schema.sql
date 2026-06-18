@@ -22,6 +22,15 @@ create table if not exists pokedex (
     ebay_url text,
     prix_median_ebay float,
     date_vente_plus_recente timestamptz,
+    prix_actif_ebay float,
+    nb_annonces_ebay_actif int default 0,
+    date_maj_ebay_actif timestamptz,
+    prix_moyen_vinted float,
+    prix_min_vinted float,
+    prix_max_vinted float,
+    nb_annonces_vinted int default 0,
+    date_maj_vinted timestamptz,
+    prix_reference_mediane float,
     derniere_maj timestamptz,
     created_at timestamptz default now()
 );
@@ -76,6 +85,9 @@ create table if not exists historique_prix (
     variation_j1_pct float,
     variation_j0_eur float,
     variation_j0_pct float,
+    prix_ebay_actif float,
+    prix_vinted float,
+    prix_mediane float,
     date date default current_date,
     created_at timestamptz default now()
 );

@@ -40,7 +40,14 @@
       </div>
       <div class="charts-grid">
         <div class="chart-card">
-          <h3>Capital investi / Valeur stock (€)</h3>
+          <div class="chart-card-head">
+            <h3>💰 Évolution valeur stock</h3>
+            <div class="segmented chart-view-toggle">
+              <button type="button" class="seg" data-view="cm">CM</button>
+              <button type="button" class="seg" data-view="ebay">eBay</button>
+              <button type="button" class="seg active" data-view="mediane">Médiane</button>
+            </div>
+          </div>
           <canvas id="chart-stock"></canvas>
         </div>
         <div class="chart-card">
@@ -64,9 +71,7 @@
               <th>Carte</th>
               <th>Extension</th>
               <th>État</th>
-              <th>Prix CM</th>
-              <th>eBay 60j</th>
-              <th>Tendance 7j</th>
+              <th>Prix de marché</th>
               <th>MAJ</th>
               <th class="actions-col-h">Actions</th>
             </tr>
@@ -96,8 +101,7 @@
               <th>Nom</th>
               <th>Lang</th>
               <th>Prix achat</th>
-              <th>Cote CM</th>
-              <th>eBay 60j</th>
+              <th>Prix de marché</th>
               <th>Marge lat.</th>
               <th>Score</th>
               <th>Statut</th>
@@ -123,8 +127,7 @@
               <th>Image</th>
               <th>Nom</th>
               <th>Lang</th>
-              <th>Cote CM</th>
-              <th>eBay 60j</th>
+              <th>Prix de marché</th>
               <th>Prix cible</th>
               <th>Marge est.</th>
               <th>Urgence</th>

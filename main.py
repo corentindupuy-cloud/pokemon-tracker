@@ -15,7 +15,7 @@ from uuid import UUID
 import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
@@ -27,6 +27,8 @@ from models import (
     PokedexCreate,
     PokedexOut,
     DashboardCharts,
+    EbayActiveResponse,
+    MarketSyncResult,
     SearchResultOut,
     RadarCreate,
     RadarOut,
@@ -37,6 +39,7 @@ from models import (
     StockUpdate,
     VenteCreate,
     VenteOut,
+    VintedActiveResponse,
 )
 from services import (
     enrich_stock_row,
@@ -49,8 +52,12 @@ from services import (
 )
 from scraper import scrape_cardmarket_url
 from ebay import fetch_sold_items, get_cached_sales, sync_pokedex_sales
+from ebay_browse import fetch_active_listings, stats_from_active_listings
+from market_sync import sync_all_market_prices
+from vinted_api import fetch_vinted_listings
 
-load_dotenv()
+_ROOT = Path(__file__).resolve().parent
+load_dotenv(_ROOT / ".env", override=True)
 
 
 def _configure_logging() -> None:
@@ -64,7 +71,7 @@ def _configure_logging() -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(logging.INFO)
-    for name in ("services", "scraper", "ebay", "uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("services", "scraper", "ebay", "vinted_api", "market_sync", "uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).setLevel(logging.INFO)
 
 
@@ -198,10 +205,21 @@ async def scheduled_trending_snapshot_job() -> None:
         logger.exception("Erreur snapshot trending: %s", exc)
 
 
+async def scheduled_market_sync_job() -> None:
+    """eBay actif + Vinted + médiane pour chaque carte (après CM local)."""
+    logger.info("Sync marché planifié (eBay actif + Vinted)")
+    try:
+        result = await sync_all_market_prices()
+        logger.info("Sync marché terminé: %s", result)
+    except Exception as exc:
+        logger.exception("Erreur sync marché planifié: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     scheduler.add_job(scheduled_scrape_job, "cron", hour=8, minute=0, id="daily_scrape")
     scheduler.add_job(scheduled_ebay_sync_job, "cron", hour=9, minute=0, id="daily_ebay_sync")
+    scheduler.add_job(scheduled_market_sync_job, "cron", hour=8, minute=30, id="daily_market_sync")
     scheduler.add_job(scheduled_trending_snapshot_job, "cron", day_of_week="mon", hour=7, minute=0, id="weekly_trending")
     scheduler.start()
     logger.info("Scheduler démarré (scraping quotidien 8h00)")
@@ -415,7 +433,9 @@ async def list_stock(statut: Optional[str] = None):
     sb = get_supabase()
     q = sb.table("stock").select(
         "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
-        "prix_moyen_ebay, nb_ventes_ebay, ebay_url)"
+        "prix_moyen_ebay, nb_ventes_ebay, ebay_url, prix_actif_ebay, "
+        "nb_annonces_ebay_actif, prix_moyen_vinted, nb_annonces_vinted, "
+        "prix_reference_mediane, tendance_7j)"
     )
     if statut:
         q = q.eq("statut", statut)
@@ -433,6 +453,12 @@ async def list_stock(statut: Optional[str] = None):
             "prix_moyen_ebay": p.get("prix_moyen_ebay"),
             "nb_ventes_ebay": p.get("nb_ventes_ebay"),
             "ebay_url": p.get("ebay_url"),
+            "prix_actif_ebay": p.get("prix_actif_ebay"),
+            "nb_annonces_ebay_actif": p.get("nb_annonces_ebay_actif"),
+            "prix_moyen_vinted": p.get("prix_moyen_vinted"),
+            "nb_annonces_vinted": p.get("nb_annonces_vinted"),
+            "prix_reference_mediane": p.get("prix_reference_mediane"),
+            "tendance_7j": p.get("tendance_7j"),
         }
         out.append(enrich_stock_row(row))
     return out
@@ -497,7 +523,8 @@ async def list_radar():
         sb.table("radar")
         .select(
             "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
-            "prix_moyen_ebay, nb_ventes_ebay)"
+            "prix_moyen_ebay, nb_ventes_ebay, prix_actif_ebay, nb_annonces_ebay_actif, "
+            "prix_moyen_vinted, nb_annonces_vinted, prix_reference_mediane, tendance_7j)"
         )
         .order("created_at", desc=True)
         .execute()
@@ -517,6 +544,12 @@ async def list_radar():
             "langue": p.get("langue"),
             "prix_moyen_ebay": p.get("prix_moyen_ebay"),
             "nb_ventes_ebay": p.get("nb_ventes_ebay"),
+            "prix_actif_ebay": p.get("prix_actif_ebay"),
+            "nb_annonces_ebay_actif": p.get("nb_annonces_ebay_actif"),
+            "prix_moyen_vinted": p.get("prix_moyen_vinted"),
+            "nb_annonces_vinted": p.get("nb_annonces_vinted"),
+            "prix_reference_mediane": p.get("prix_reference_mediane"),
+            "tendance_7j": p.get("tendance_7j"),
         })
     return out
 
@@ -531,10 +564,11 @@ async def add_radar(body: RadarCreate):
 
     data = body.model_dump(exclude_none=True)
     data["pokedex_id"] = pid
-    p = sb.table("pokedex").select("prix_actuel").eq("id", pid).execute()
+    p = sb.table("pokedex").select("prix_actuel, prix_reference_mediane").eq("id", pid).execute()
     from services import compute_urgence
 
-    prix_actuel = p.data[0].get("prix_actuel") if p.data else None
+    prix_row = p.data[0] if p.data else {}
+    prix_actuel = prix_row.get("prix_reference_mediane") or prix_row.get("prix_actuel")
     data["urgence"] = compute_urgence(
         float(prix_actuel) if prix_actuel is not None else None,
         float(data["prix_cible"]),
@@ -694,11 +728,93 @@ async def dashboard_charts():
         return {
             "labels": [today],
             "valeur_stock": [kpis.get("valeur_stock", 0)],
+            "valeur_stock_cm": [kpis.get("valeur_stock_cm", 0)],
+            "valeur_stock_ebay": [kpis.get("valeur_stock_ebay", 0)],
+            "valeur_stock_mediane": [kpis.get("valeur_stock", 0)],
             "chiffre_affaires": [0],
         }
 
 
+# ─── Sync marché (eBay actif + Vinted) ─────────────────────────────────────
+
+@app.post("/api/sync/trigger", response_model=MarketSyncResult)
+async def sync_trigger(x_sync_secret: Optional[str] = Header(None, alias="X-Sync-Secret")):
+    """
+    Déclenché par update_cotes.py (Mac) après scraping CardMarket.
+    Lance eBay Browse + Vinted + calcul médiane pour chaque carte.
+    """
+    expected = (os.getenv("SYNC_API_SECRET") or "").strip()
+    if expected and x_sync_secret != expected:
+        raise HTTPException(403, "Secret sync invalide")
+    try:
+        result = await sync_all_market_prices()
+        return result
+    except Exception as exc:
+        logger.exception("Sync marché: %s", exc)
+        raise HTTPException(500, str(exc)) from exc
+
+
+# ─── Vinted ────────────────────────────────────────────────────────────────
+
+@app.get("/api/vinted/active", response_model=VintedActiveResponse)
+async def vinted_active(
+    q: str = Query(..., min_length=2, description="Mot-clé recherche Vinted"),
+    langue: str = Query("FR", description="Langue / domaine Vinted"),
+):
+    keyword = q.strip()
+    lang = (langue or "FR").upper()
+    if lang not in LANGUES_POKEDEX:
+        raise HTTPException(400, f"Langue invalide (attendu: {', '.join(sorted(LANGUES_POKEDEX))})")
+    try:
+        data = await fetch_vinted_listings(keyword, langue=lang)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    return {
+        "keyword": keyword,
+        "langue": lang,
+        "stats": {
+            "prix_moyen_vinted": data.get("prix_moyen_vinted"),
+            "prix_min_vinted": data.get("prix_min_vinted"),
+            "prix_max_vinted": data.get("prix_max_vinted"),
+            "nb_annonces_vinted": data.get("nb_annonces_vinted") or 0,
+        },
+        "listings": data.get("listings") or [],
+    }
+
+
 # ─── eBay ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/ebay/active", response_model=EbayActiveResponse)
+async def ebay_active(q: str = Query(..., min_length=2, description="Mot-clé recherche eBay")):
+    """Annonces actives eBay (Browse REST API) + stats prix demandés."""
+    keyword = q.strip()
+    try:
+        listings = await fetch_active_listings(keyword)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        logger.warning("eBay Browse HTTP %s: %s", exc.response.status_code, exc)
+        raise HTTPException(502, f"eBay Browse API: {exc.response.status_code}") from exc
+
+    stats = stats_from_active_listings(listings)
+    return {
+        "keyword": keyword,
+        "stats": stats,
+        "listings": [
+            {
+                "titre": l.titre,
+                "prix": l.prix,
+                "devise": l.devise,
+                "url_ebay": l.url_ebay,
+                "image_url": l.image_url,
+                "item_id": l.item_id,
+                "condition": l.condition,
+            }
+            for l in listings
+        ],
+    }
+
 
 @app.get("/api/ebay/sold/{pokedex_id}")
 async def ebay_sold(pokedex_id: UUID):
