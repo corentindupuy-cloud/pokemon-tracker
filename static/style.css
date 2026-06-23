@@ -950,6 +950,25 @@ tr:hover td { background: rgba(59, 130, 246, 0.08); }
   border-top: 1px solid var(--border);
 }
 
-.market-prices-col {
-  min-width: 14rem;
+.type-badge {
+  display: inline-block;
+  font-size: 0.95rem;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.product-name-cell {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.card-num {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+#add-pdex-single-fields {
+  display: block;
 }

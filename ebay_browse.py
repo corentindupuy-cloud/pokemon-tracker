@@ -23,6 +23,8 @@ from typing import Any, Optional
 
 import httpx
 
+from product_keywords import build_keyword, min_price_for_type, title_matches, title_tokens_for_card
+
 logger = logging.getLogger(__name__)
 
 EBAY_OAUTH_URL = "https://api.ebay.com/identity/v1/oauth2/token"
@@ -208,6 +210,23 @@ async def fetch_active_listings(
     return listings
 
 
+def filter_active_listings(
+    listings: list[EbayActiveListing],
+    card: dict[str, Any],
+) -> list[EbayActiveListing]:
+    """Filtre prix minimum et pertinence du titre selon le type produit."""
+    min_price = min_price_for_type(card.get("type_produit", "single"))
+    tokens = title_tokens_for_card(card)
+    out: list[EbayActiveListing] = []
+    for listing in listings:
+        if listing.prix is None or listing.prix < min_price:
+            continue
+        if tokens and not title_matches(listing.titre, tokens):
+            continue
+        out.append(listing)
+    return out
+
+
 async def fetch_sold_listings(
     keyword: str,
     *,
@@ -249,20 +268,26 @@ async def fetch_sold_listings(
 def stats_from_active_listings(
     listings: list[EbayActiveListing],
 ) -> dict[str, Any]:
-    """Stats simples sur les prix demandés (annonces actives)."""
+    """Stats sur les prix demandés (annonces actives retournées par l'API)."""
+    nb = len(listings)
+    empty = {
+        "prix_moyen": None,
+        "prix_min": None,
+        "prix_max": None,
+        "nb_annonces": nb,
+        "source": "browse_active",
+    }
+    if nb == 0:
+        return empty
+
     prices = [l.prix for l in listings if l.prix is not None and l.prix > 0]
     if not prices:
-        return {
-            "prix_moyen": None,
-            "prix_min": None,
-            "prix_max": None,
-            "nb_annonces": 0,
-            "source": "browse_active",
-        }
+        return empty
+
     return {
         "prix_moyen": round(sum(prices) / len(prices), 2),
         "prix_min": round(min(prices), 2),
         "prix_max": round(max(prices), 2),
-        "nb_annonces": len(prices),
+        "nb_annonces": nb,
         "source": "browse_active",
     }

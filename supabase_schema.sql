@@ -31,6 +31,10 @@ create table if not exists pokedex (
     nb_annonces_vinted int default 0,
     date_maj_vinted timestamptz,
     prix_reference_mediane float,
+    type_produit text default 'single',
+    numero_carte text,
+    code_set text,
+    nom_en text,
     derniere_maj timestamptz,
     created_at timestamptz default now()
 );

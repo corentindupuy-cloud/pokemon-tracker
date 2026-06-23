@@ -10,6 +10,14 @@ from urllib.parse import quote_plus
 
 from vinted import VintedClient
 
+from product_keywords import (
+    build_keyword,
+    min_price_for_type,
+    resolve_market_keyword,
+    title_matches,
+    title_tokens_for_card,
+)
+
 logger = logging.getLogger(__name__)
 
 _VINTED_DOMAIN_BY_LANG = {
@@ -35,19 +43,52 @@ def build_vinted_search_url(keyword: str, langue: str = "FR") -> str:
     return f"https://www.vinted.{domain}/catalog?search_text={q}&order=price_low_to_high"
 
 
-async def fetch_vinted_listings(keyword: str, langue: str = "FR", *, per_page: int = 20) -> dict[str, Any]:
-    """Recherche Vinted et stats prix (moyenne / min / max)."""
-    kw = (keyword or "").strip()
-    if not kw:
-        return {
-            "prix_moyen_vinted": None,
-            "prix_min_vinted": None,
-            "prix_max_vinted": None,
-            "nb_annonces_vinted": 0,
-            "listings": [],
-        }
+def _filter_vinted_item(
+    item: Any,
+    *,
+    min_price: float,
+    title_tokens: list[str],
+) -> Optional[dict[str, Any]]:
+    titre = str(getattr(item, "title", "") or "").strip()
+    if not titre:
+        return None
+    if title_tokens and not title_matches(titre, title_tokens):
+        return None
+    try:
+        price = float(item.price) if item.price is not None else None
+    except (TypeError, ValueError):
+        price = None
+    if price is None or price < min_price:
+        return None
+    return {
+        "titre": titre,
+        "prix": round(price, 2),
+        "url": getattr(item, "url", None),
+    }
 
-    url = build_vinted_search_url(kw, langue)
+
+async def fetch_vinted_listings(
+    keyword: str | None = None,
+    langue: str = "FR",
+    *,
+    card: Optional[dict[str, Any]] = None,
+    per_page: int = 20,
+) -> dict[str, Any]:
+    """Recherche Vinted et stats prix sur annonces filtrées."""
+    card = card or {}
+    kw = (keyword or resolve_market_keyword(card) or build_keyword(card)).strip()
+    empty = {
+        "prix_moyen_vinted": None,
+        "prix_min_vinted": None,
+        "prix_max_vinted": None,
+        "nb_annonces_vinted": 0,
+        "listings": [],
+        "keyword": kw,
+    }
+    if not kw:
+        return empty
+
+    url = build_vinted_search_url(kw, langue or card.get("langue") or "FR")
     try:
         async with VintedClient() as client:
             items = await client.search_items(url=url, per_page=per_page)
@@ -55,29 +96,28 @@ async def fetch_vinted_listings(keyword: str, langue: str = "FR", *, per_page: i
         logger.warning("Vinted search %r: %s", kw, exc)
         raise RuntimeError(f"Vinted indisponible: {exc}") from exc
 
-    prices: list[float] = []
-    listings: list[dict[str, Any]] = []
+    min_price = min_price_for_type(card.get("type_produit", "single"))
+    title_tokens = title_tokens_for_card(card)
+    filtered: list[dict[str, Any]] = []
     for item in items:
-        try:
-            price = float(item.price) if item.price is not None else None
-        except (TypeError, ValueError):
-            price = None
-        if price is not None and price > 0:
-            prices.append(price)
-        if len(listings) < 10:
-            listings.append(
-                {
-                    "titre": str(getattr(item, "title", "") or ""),
-                    "prix": price,
-                    "url": getattr(item, "url", None),
-                }
-            )
+        row = _filter_vinted_item(item, min_price=min_price, title_tokens=title_tokens)
+        if row:
+            filtered.append(row)
 
-    logger.info("Vinted: %s annonce(s) pour %r", len(prices), kw)
+    prices = [r["prix"] for r in filtered]
+    nb = len(filtered)
+    logger.info(
+        "Vinted: %s/%s annonce(s) retenue(s) pour %r (min %.0f€)",
+        nb,
+        len(items),
+        kw,
+        min_price,
+    )
     return {
         "prix_moyen_vinted": round(sum(prices) / len(prices), 2) if prices else None,
         "prix_min_vinted": min(prices) if prices else None,
         "prix_max_vinted": max(prices) if prices else None,
-        "nb_annonces_vinted": len(prices),
-        "listings": listings,
+        "nb_annonces_vinted": nb,
+        "listings": filtered[:10],
+        "keyword": kw,
     }

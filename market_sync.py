@@ -7,50 +7,23 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any, Optional
-from urllib.parse import parse_qs, urlparse
+from typing import Any
 
 from database import get_supabase
-from ebay import resolve_ebay_search
-from ebay_browse import fetch_active_listings, stats_from_active_listings
-from pricing import compute_reference_median, market_keyword_for_card
+from ebay_browse import fetch_active_listings, filter_active_listings, stats_from_active_listings
+from pricing import compute_reference_median
+from product_keywords import resolve_market_keyword
 from vinted_api import fetch_vinted_listings
 
 logger = logging.getLogger(__name__)
 
 MARKET_SYNC_DELAY_S = 1.5
 
-
-def _keyword_from_ebay_url(url: str) -> Optional[str]:
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query)
-    for key in ("_nkw", "q", "_skw"):
-        if qs.get(key):
-            return qs[key][0].replace("+", " ").strip() or None
-    return None
-
-
-def browse_keyword_for_card(card: dict[str, Any]) -> str:
-    nom = card.get("nom") or ""
-    ext = card.get("extension") or ""
-    langue = card.get("langue") or "FR"
-    ebay_kw = card.get("ebay_keyword")
-    ebay_url = card.get("ebay_url")
-
-    plan = resolve_ebay_search(
-        nom,
-        ext,
-        langue=langue,
-        ebay_keyword=ebay_kw,
-        ebay_url=ebay_url,
-    )
-    if plan.keywords:
-        return plan.keywords
-    if plan.search_url:
-        from_url = _keyword_from_ebay_url(plan.search_url)
-        if from_url:
-            return from_url
-    return market_keyword_for_card(nom, ext, langue=langue, ebay_keyword=ebay_kw, ebay_url=ebay_url)
+_POKEDEX_MARKET_SELECT = (
+    "id, nom, extension, langue, ebay_keyword, ebay_url, "
+    "type_produit, numero_carte, code_set, nom_en, "
+    "prix_actuel, tendance_7j, prix_reference_mediane"
+)
 
 
 async def sync_card_market_prices(card: dict[str, Any]) -> dict[str, Any]:
@@ -59,42 +32,51 @@ async def sync_card_market_prices(card: dict[str, Any]) -> dict[str, Any]:
 
     pid = str(card["id"])
     nom = card.get("nom") or ""
-    keyword = browse_keyword_for_card(card)
+    keyword = resolve_market_keyword(card)
     langue = card.get("langue") or "FR"
     prix_cm = card.get("prix_actuel")
     old_median = card.get("prix_reference_mediane")
 
     ebay_stats = {"prix_moyen": None, "nb_annonces": 0}
-    vinted_stats = {"prix_moyen_vinted": None, "nb_annonces_vinted": 0}
+    vinted_stats = {"prix_moyen_vinted": None, "nb_annonces_vinted": 0, "keyword": keyword}
 
     try:
-        listings = await fetch_active_listings(keyword)
+        raw_listings = await fetch_active_listings(keyword)
+        listings = filter_active_listings(raw_listings, card)
         ebay_stats = stats_from_active_listings(listings)
     except Exception as exc:
         logger.warning("eBay actif %s (%s): %s", nom or pid, keyword, exc)
 
     try:
-        vinted_stats = await fetch_vinted_listings(keyword, langue=langue)
+        vinted_stats = await fetch_vinted_listings(langue=langue, card=card)
     except Exception as exc:
         logger.warning("Vinted %s (%s): %s", nom or pid, keyword, exc)
 
-    prix_ebay = ebay_stats.get("prix_moyen")
-    prix_vinted = vinted_stats.get("prix_moyen_vinted")
+    nb_ebay = int(ebay_stats.get("nb_annonces") or 0)
+    nb_vinted = int(vinted_stats.get("nb_annonces_vinted") or 0)
+    prix_ebay = ebay_stats.get("prix_moyen") if nb_ebay > 0 else None
+    prix_vinted = vinted_stats.get("prix_moyen_vinted") if nb_vinted > 0 else None
     prix_cm_f = float(prix_cm) if prix_cm is not None else None
-    prix_ref = compute_reference_median(prix_cm_f, prix_ebay, prix_vinted)
+    prix_ref = compute_reference_median(
+        prix_cm_f,
+        prix_ebay,
+        prix_vinted,
+        nb_ebay=nb_ebay,
+        nb_vinted=nb_vinted,
+    )
     now = datetime.now(timezone.utc).isoformat()
 
-    update: dict[str, Any] = {"prix_reference_mediane": prix_ref}
-    if prix_ebay is not None:
-        update["prix_actif_ebay"] = prix_ebay
-        update["nb_annonces_ebay_actif"] = ebay_stats.get("nb_annonces") or 0
-        update["date_maj_ebay_actif"] = now
-    if prix_vinted is not None:
-        update["prix_moyen_vinted"] = prix_vinted
-        update["prix_min_vinted"] = vinted_stats.get("prix_min_vinted")
-        update["prix_max_vinted"] = vinted_stats.get("prix_max_vinted")
-        update["nb_annonces_vinted"] = vinted_stats.get("nb_annonces_vinted") or 0
-        update["date_maj_vinted"] = now
+    update: dict[str, Any] = {
+        "prix_reference_mediane": prix_ref,
+        "prix_actif_ebay": prix_ebay,
+        "nb_annonces_ebay_actif": nb_ebay,
+        "date_maj_ebay_actif": now if nb_ebay > 0 else None,
+        "prix_moyen_vinted": prix_vinted,
+        "prix_min_vinted": vinted_stats.get("prix_min_vinted") if nb_vinted > 0 else None,
+        "prix_max_vinted": vinted_stats.get("prix_max_vinted") if nb_vinted > 0 else None,
+        "nb_annonces_vinted": nb_vinted,
+        "date_maj_vinted": now if nb_vinted > 0 else None,
+    }
 
     sb = get_supabase()
     sb.table("pokedex").update(update).eq("id", pid).execute()
@@ -124,10 +106,7 @@ async def sync_all_market_prices(*, delay_s: float = MARKET_SYNC_DELAY_S) -> dic
     sb = get_supabase()
     cards = (
         sb.table("pokedex")
-        .select(
-            "id, nom, extension, langue, ebay_keyword, ebay_url, "
-            "prix_actuel, tendance_7j, prix_reference_mediane"
-        )
+        .select(_POKEDEX_MARKET_SELECT)
         .order("nom")
         .execute()
         .data

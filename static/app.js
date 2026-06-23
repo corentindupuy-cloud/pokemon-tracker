@@ -32,21 +32,25 @@ let lastChartData = null;
 
 function prixReference(row) {
   if (row.prix_reference_mediane != null) return row.prix_reference_mediane;
-  const prices = [row.prix_actuel, row.prix_actif_ebay, row.prix_moyen_vinted]
-    .filter((v) => v != null && v > 0)
-    .sort((a, b) => a - b);
-  if (!prices.length) return null;
-  const mid = Math.floor(prices.length / 2);
-  return prices.length % 2 ? prices[mid] : (prices[mid - 1] + prices[mid]) / 2;
+  const sources = [];
+  if (row.prix_actuel != null && row.prix_actuel > 0) sources.push(row.prix_actuel);
+  const nbEbay = row.nb_annonces_ebay_actif ?? 0;
+  const nbVinted = row.nb_annonces_vinted ?? 0;
+  if (row.prix_actif_ebay != null && nbEbay >= 3) sources.push(row.prix_actif_ebay);
+  if (row.prix_moyen_vinted != null && nbVinted >= 3) sources.push(row.prix_moyen_vinted);
+  if (sources.length < 2) return null;
+  sources.sort((a, b) => a - b);
+  const mid = Math.floor(sources.length / 2);
+  return sources.length % 2 ? sources[mid] : (sources[mid - 1] + sources[mid]) / 2;
 }
 
 function marketPricesBlock(row) {
   const tend = row.tendance_7j != null ? ` <small class="muted">(7j: ${fmtEur(row.tendance_7j)})</small>` : "";
   const cm = row.prix_actuel != null ? fmtEur(row.prix_actuel) : "—";
-  const ebay = row.prix_actif_ebay != null ? fmtEur(row.prix_actif_ebay) : "—";
   const ebayNb = row.nb_annonces_ebay_actif ?? 0;
-  const vinted = row.prix_moyen_vinted != null ? fmtEur(row.prix_moyen_vinted) : "—";
   const vintedNb = row.nb_annonces_vinted ?? 0;
+  const ebay = row.prix_actif_ebay != null && ebayNb > 0 ? fmtEur(row.prix_actif_ebay) : "—";
+  const vinted = row.prix_moyen_vinted != null && vintedNb > 0 ? fmtEur(row.prix_moyen_vinted) : "—";
   const ref = prixReference(row);
   const refLine = ref != null
     ? `<div class="market-price-row market-price-ref"><span>📐 Réf. médiane</span><span><strong>${fmtEur(ref)}</strong></span></div>`
@@ -159,6 +163,137 @@ function initUniversalSearchBars() {
   });
 }
 
+const TYPE_PRODUIT_OPTIONS = [
+  { value: "single", label: "🃏 Single" },
+  { value: "etb", label: "📦 ETB" },
+  { value: "display", label: "📦 Display" },
+  { value: "bundle", label: "📦 Bundle" },
+  { value: "collection", label: "📦 Collection" },
+  { value: "promo", label: "⭐ Promo" },
+];
+
+function productTypeEmoji(type) {
+  const map = {
+    single: "🃏",
+    etb: "📦",
+    display: "📦",
+    bundle: "📦",
+    collection: "📦",
+    promo: "⭐",
+  };
+  return map[(type || "single").toLowerCase()] || "🃏";
+}
+
+function productTypeBadge(type) {
+  const t = (type || "single").toLowerCase();
+  const opt = TYPE_PRODUIT_OPTIONS.find((o) => o.value === t);
+  const label = opt ? opt.label.split(" ").slice(1).join(" ") : "Single";
+  return `<span class="type-badge" title="${escapeAttr(label)}">${productTypeEmoji(t)}</span>`;
+}
+
+function cardNumberLine(row) {
+  if (!row?.numero_carte) return "";
+  const set = row.code_set ? ` · ${escapeAttr(row.code_set)}` : "";
+  return `<br><small class="card-num">${escapeAttr(row.numero_carte)}${set}</small>`;
+}
+
+function productNameCell(row) {
+  return (
+    `<div class="product-name-cell">` +
+    `${productTypeBadge(row?.type_produit)} ` +
+    `<strong>${escapeAttr(displayNom(row?.nom))}</strong>` +
+    `${cardNumberLine(row)}` +
+    `</div>`
+  );
+}
+
+function pokedexAddFormHtml(item) {
+  const typeOpts = TYPE_PRODUIT_OPTIONS.map(
+    (o) => `<option value="${o.value}">${escapeAttr(o.label)}</option>`
+  ).join("");
+  return `
+    <h3>Ajouter au Pokédex</h3>
+    <form class="modal-form pokedex-add-form" id="form-add-pokedex">
+      <label>URL CardMarket</label>
+      <input type="url" id="add-pdex-url" value="${escapeAttr(item.url_cardmarket)}" required readonly />
+      <label>Type produit</label>
+      <select id="add-pdex-type" class="btn-touch">${typeOpts}</select>
+      <div id="add-pdex-single-fields">
+        <label>Numéro de carte</label>
+        <input type="text" id="add-pdex-numero" placeholder="ex: 199/182" />
+        <label>Code set</label>
+        <input type="text" id="add-pdex-code-set" placeholder="ex: PAR, MEP, SV" />
+      </div>
+      <label>Nom EN <small class="muted">(recommandé pour scellés)</small></label>
+      <input type="text" id="add-pdex-nom-en" placeholder="ex: Charizard ex Ultra-Premium Collection" />
+      <label>Langue</label>
+      <select id="add-pdex-langue" class="btn-touch">
+        <option value="FR">🇫🇷 FR</option>
+        <option value="EN">🇬🇧 EN</option>
+        <option value="JP">🇯🇵 JP</option>
+        <option value="IT">🇮🇹 IT</option>
+        <option value="DE">🇩🇪 DE</option>
+        <option value="ES">🇪🇸 ES</option>
+      </select>
+      <label>Keyword eBay <small class="muted">(optionnel)</small></label>
+      <input type="text" id="add-pdex-ebay-kw" placeholder="Laisse vide = auto" />
+      <label>URL eBay <small class="muted">(optionnel)</small></label>
+      <input type="url" id="add-pdex-ebay-url" placeholder="https://www.ebay.fr/..." />
+      <div class="modal-actions">
+        <button type="submit" class="btn btn-accent btn-touch">Ajouter et scraper</button>
+        <button type="button" class="btn btn-ghost btn-touch" id="add-pdex-cancel">Annuler</button>
+      </div>
+    </form>
+  `;
+}
+
+function bindPokedexAddForm(item) {
+  const typeSel = $("#add-pdex-type");
+  const singleFields = $("#add-pdex-single-fields");
+  const toggleSingle = () => {
+    const isSingle = typeSel.value === "single";
+    singleFields.style.display = isSingle ? "block" : "none";
+  };
+  typeSel.onchange = toggleSingle;
+  toggleSingle();
+  $("#add-pdex-cancel").onclick = closeAppModal;
+  $("#form-add-pokedex").onsubmit = async (e) => {
+    e.preventDefault();
+    const body = {
+      url_cardmarket: $("#add-pdex-url").value.trim(),
+      type_produit: typeSel.value,
+      langue: $("#add-pdex-langue").value,
+      numero_carte: $("#add-pdex-numero").value.trim() || null,
+      code_set: $("#add-pdex-code-set").value.trim() || null,
+      nom_en: $("#add-pdex-nom-en").value.trim() || null,
+      ebay_keyword: $("#add-pdex-ebay-kw").value.trim() || null,
+      ebay_url: $("#add-pdex-ebay-url").value.trim() || null,
+    };
+    if (body.type_produit !== "single") {
+      body.numero_carte = null;
+      body.code_set = null;
+    }
+    try {
+      const res = await api("/api/pokedex", { method: "POST", body: JSON.stringify(body) });
+      await loadPokedexOptions();
+      openAppModal(`
+        <h3>${escapeAttr(displayNom(res.nom || item.nom))}</h3>
+        <p class="muted">Carte ajoutée au Pokédex.</p>
+        <div class="modal-actions">
+          <button class="btn btn-accent btn-touch" data-act="stock" data-id="${res.pokedex_id}">Ajouter au Stock</button>
+          <button class="btn btn-touch" data-act="radar" data-id="${res.pokedex_id}">Ajouter au Radar</button>
+          <button class="btn btn-ghost btn-touch" data-act="close">Juste suivre</button>
+        </div>
+      `);
+      bindSearchActionButtons({ id: res.pokedex_id, nom: res.nom || item.nom });
+      await loadPokedex();
+      loadDashboard();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+}
+
 async function onSearchResultClick(item) {
   const existing = pokedexCache.find((c) => c.url_cardmarket?.split("?")[0] === item.url_cardmarket?.split("?")[0]);
   if (existing) {
@@ -175,28 +310,8 @@ async function onSearchResultClick(item) {
     return;
   }
 
-  openAppModal(`<p class="muted">Ajout au Pokédex…</p>`);
-  try {
-    const res = await api("/api/pokedex", {
-      method: "POST",
-      body: JSON.stringify({ url_cardmarket: item.url_cardmarket, langue: "FR" }),
-    });
-    await loadPokedexOptions();
-    openAppModal(`
-      <h3>${escapeAttr(displayNom(res.nom || item.nom))}</h3>
-      <p class="muted">Carte ajoutée au Pokédex.</p>
-      <div class="modal-actions">
-        <button class="btn btn-accent btn-touch" data-act="stock" data-id="${res.pokedex_id}">Ajouter au Stock</button>
-        <button class="btn btn-touch" data-act="radar" data-id="${res.pokedex_id}">Ajouter au Radar</button>
-        <button class="btn btn-ghost btn-touch" data-act="close">Juste suivre</button>
-      </div>
-    `);
-    bindSearchActionButtons({ id: res.pokedex_id, nom: res.nom || item.nom });
-    await loadPokedex();
-    loadDashboard();
-  } catch (err) {
-    openAppModal(`<p class="empty">Erreur : ${escapeAttr(err.message)}</p>`);
-  }
+  openAppModal(pokedexAddFormHtml(item));
+  bindPokedexAddForm(item);
 }
 
 function bindSearchActionButtons(card) {
@@ -422,14 +537,15 @@ function cardCell(row, actionsHtml = "") {
   const extHtml = row?.extension
     ? `<br><small style="color:var(--muted)">${escapeAttr(row.extension)}</small>`
     : "";
-  const langHtml = `<div class="card-lang">${langueBadge(row?.langue)}</div>`;
+  const langHtml = `<div class="card-lang">${langueBadge(row?.langue)} ${productTypeBadge(row?.type_produit)}</div>`;
+  const numHtml = cardNumberLine(row);
   const actions = actionsHtml
     ? `<div class="card-actions">${actionsHtml}</div>`
     : "";
   return (
     `<div class="card-cell">` +
     `${thumb}` +
-    `<div class="card-cell-info">${langHtml}<strong>${escapeAttr(name)}</strong>${extHtml}</div>` +
+    `<div class="card-cell-info">${langHtml}<strong>${escapeAttr(name)}</strong>${extHtml}${numHtml}</div>` +
     `${actions}` +
     `</div>`
   );
@@ -966,7 +1082,7 @@ async function loadStock() {
     const score = opportunityScore(r);
     return `<tr>
       <td>${thumbHtml(r.image_url, displayNom(r.nom))}</td>
-      <td><strong>${escapeAttr(displayNom(r.nom))}</strong><br><small class="muted">${escapeAttr(r.extension || "")}</small></td>
+      <td>${productNameCell(r)}<br><small class="muted">${escapeAttr(r.extension || "")}</small></td>
       <td>${langueBadge(r.langue)}</td>
       <td>${fmtEur(r.prix_achat)}</td>
       <td class="market-prices-col">${marketPricesBlock(r)}</td>
@@ -1019,7 +1135,7 @@ async function loadRadar() {
       : null;
     return `<tr>
       <td>${thumbHtml(r.image_url, displayNom(r.nom))}</td>
-      <td><strong>${escapeAttr(displayNom(r.nom))}</strong></td>
+      <td>${productNameCell(r)}</td>
       <td>${langueBadge(r.langue)}</td>
       <td class="market-prices-col">${marketPricesBlock(r)}</td>
       <td>${fmtEur(r.prix_cible)}</td>

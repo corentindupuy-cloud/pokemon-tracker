@@ -352,12 +352,16 @@ def _pokedex_price_maps(pokedex: list[dict]) -> dict[str, dict[str, Optional[flo
         cm = p.get("prix_actuel")
         ebay = p.get("prix_actif_ebay")
         vinted = p.get("prix_moyen_vinted")
+        nb_ebay = int(p.get("nb_annonces_ebay_actif") or 0)
+        nb_vinted = int(p.get("nb_annonces_vinted") or 0)
         median = p.get("prix_reference_mediane")
         if median is None:
             median = compute_reference_median(
                 float(cm) if cm is not None else None,
                 float(ebay) if ebay is not None else None,
                 float(vinted) if vinted is not None else None,
+                nb_ebay=nb_ebay,
+                nb_vinted=nb_vinted,
             )
         out[pid] = {
             "cm": float(cm) if cm is not None else None,
@@ -562,7 +566,8 @@ def get_dashboard_kpis() -> dict[str, Any]:
     pokedex = (
         sb.table("pokedex")
         .select(
-            "id, prix_actuel, prix_actif_ebay, prix_moyen_vinted, prix_reference_mediane"
+            "id, prix_actuel, prix_actif_ebay, prix_moyen_vinted, prix_reference_mediane, "
+            "nb_annonces_ebay_actif, nb_annonces_vinted"
         )
         .execute()
         .data

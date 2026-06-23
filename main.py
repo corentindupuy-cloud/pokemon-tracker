@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from database import get_supabase
 from models import (
     LANGUES_POKEDEX,
+    TYPES_PRODUIT,
     DashboardFullOut,
     DashboardKPIs,
     PokedexCreate,
@@ -349,10 +350,21 @@ async def add_pokedex(body: PokedexCreate):
     if langue not in LANGUES_POKEDEX:
         raise HTTPException(400, f"Langue invalide (attendu: {', '.join(sorted(LANGUES_POKEDEX))})")
 
+    type_produit = (body.type_produit or "single").lower()
+    if type_produit not in TYPES_PRODUIT:
+        raise HTTPException(
+            400,
+            f"Type produit invalide (attendu: {', '.join(sorted(TYPES_PRODUIT))})",
+        )
+
     ebay_kw = (body.ebay_keyword or "").strip() or None
     ebay_url = (body.ebay_url or "").strip() or None
     if ebay_url and "ebay." not in ebay_url.lower():
         raise HTTPException(400, "URL eBay invalide")
+
+    numero = (body.numero_carte or "").strip() or None
+    code_set = (body.code_set or "").strip() or None
+    nom_en = (body.nom_en or "").strip() or None
 
     ins = sb.table("pokedex").insert(
         {
@@ -360,6 +372,10 @@ async def add_pokedex(body: PokedexCreate):
             "nom": "Chargement…",
             "etat": "Near Mint",
             "langue": langue,
+            "type_produit": type_produit,
+            "numero_carte": numero,
+            "code_set": code_set,
+            "nom_en": nom_en,
             "ebay_keyword": ebay_kw,
             "ebay_url": ebay_url,
         }
@@ -435,7 +451,7 @@ async def list_stock(statut: Optional[str] = None):
         "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
         "prix_moyen_ebay, nb_ventes_ebay, ebay_url, prix_actif_ebay, "
         "nb_annonces_ebay_actif, prix_moyen_vinted, nb_annonces_vinted, "
-        "prix_reference_mediane, tendance_7j)"
+        "prix_reference_mediane, tendance_7j, type_produit, numero_carte, code_set, nom_en)"
     )
     if statut:
         q = q.eq("statut", statut)
@@ -459,6 +475,10 @@ async def list_stock(statut: Optional[str] = None):
             "nb_annonces_vinted": p.get("nb_annonces_vinted"),
             "prix_reference_mediane": p.get("prix_reference_mediane"),
             "tendance_7j": p.get("tendance_7j"),
+            "type_produit": p.get("type_produit") or "single",
+            "numero_carte": p.get("numero_carte"),
+            "code_set": p.get("code_set"),
+            "nom_en": p.get("nom_en"),
         }
         out.append(enrich_stock_row(row))
     return out
@@ -524,7 +544,8 @@ async def list_radar():
         .select(
             "*, pokedex(nom, extension, image_url, prix_actuel, langue, "
             "prix_moyen_ebay, nb_ventes_ebay, prix_actif_ebay, nb_annonces_ebay_actif, "
-            "prix_moyen_vinted, nb_annonces_vinted, prix_reference_mediane, tendance_7j)"
+            "prix_moyen_vinted, nb_annonces_vinted, prix_reference_mediane, tendance_7j, "
+            "type_produit, numero_carte, code_set, nom_en)"
         )
         .order("created_at", desc=True)
         .execute()
@@ -550,6 +571,10 @@ async def list_radar():
             "nb_annonces_vinted": p.get("nb_annonces_vinted"),
             "prix_reference_mediane": p.get("prix_reference_mediane"),
             "tendance_7j": p.get("tendance_7j"),
+            "type_produit": p.get("type_produit") or "single",
+            "numero_carte": p.get("numero_carte"),
+            "code_set": p.get("code_set"),
+            "nom_en": p.get("nom_en"),
         })
     return out
 
@@ -760,13 +785,31 @@ async def sync_trigger(x_sync_secret: Optional[str] = Header(None, alias="X-Sync
 async def vinted_active(
     q: str = Query(..., min_length=2, description="Mot-clé recherche Vinted"),
     langue: str = Query("FR", description="Langue / domaine Vinted"),
+    type_produit: str = Query("single", description="Type produit"),
+    nom: str = Query("", description="Nom carte (filtrage titre)"),
+    extension: str = Query("", description="Extension"),
+    numero_carte: str = Query("", description="Numéro carte"),
+    code_set: str = Query("", description="Code set"),
+    nom_en: str = Query("", description="Nom anglais"),
 ):
     keyword = q.strip()
     lang = (langue or "FR").upper()
     if lang not in LANGUES_POKEDEX:
         raise HTTPException(400, f"Langue invalide (attendu: {', '.join(sorted(LANGUES_POKEDEX))})")
+    tp = (type_produit or "single").lower()
+    if tp not in TYPES_PRODUIT:
+        raise HTTPException(400, f"Type produit invalide")
+    card = {
+        "nom": nom.strip() or keyword,
+        "extension": extension.strip(),
+        "langue": lang,
+        "type_produit": tp,
+        "numero_carte": numero_carte.strip() or None,
+        "code_set": code_set.strip() or None,
+        "nom_en": nom_en.strip() or None,
+    }
     try:
-        data = await fetch_vinted_listings(keyword, langue=lang)
+        data = await fetch_vinted_listings(keyword, langue=lang, card=card)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
 

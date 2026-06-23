@@ -18,11 +18,16 @@ class PokedexBase(BaseModel):
 
 
 LANGUES_POKEDEX = frozenset({"FR", "EN", "JP", "IT", "DE", "ES"})
+TYPES_PRODUIT = frozenset({"single", "etb", "display", "bundle", "collection", "promo"})
 
 
 class PokedexCreate(BaseModel):
     url_cardmarket: str
     langue: str = "FR"
+    type_produit: str = "single"
+    numero_carte: Optional[str] = None
+    code_set: Optional[str] = None
+    nom_en: Optional[str] = None
     ebay_keyword: Optional[str] = None
     ebay_url: Optional[str] = None
 
@@ -54,6 +59,10 @@ class PokedexOut(PokedexBase):
     prix_reference_mediane: Optional[float] = None
     date_vente_plus_recente: Optional[datetime] = None
     langue: str = "FR"
+    type_produit: str = "single"
+    numero_carte: Optional[str] = None
+    code_set: Optional[str] = None
+    nom_en: Optional[str] = None
     ebay_keyword: Optional[str] = None
     ebay_url: Optional[str] = None
     derniere_maj: Optional[datetime] = None
@@ -100,6 +109,8 @@ class StockOut(BaseModel):
     prix_reference_mediane: Optional[float] = None
     prix_actif_ebay: Optional[float] = None
     prix_moyen_vinted: Optional[float] = None
+    type_produit: Optional[str] = "single"
+    numero_carte: Optional[str] = None
     marge_latente: Optional[float] = None
 
 
@@ -142,6 +153,8 @@ class RadarOut(BaseModel):
     prix_reference_mediane: Optional[float] = None
     prix_actif_ebay: Optional[float] = None
     prix_moyen_vinted: Optional[float] = None
+    type_produit: Optional[str] = "single"
+    numero_carte: Optional[str] = None
 
 
 class VenteCreate(BaseModel):

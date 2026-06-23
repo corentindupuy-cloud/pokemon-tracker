@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from ebay import build_keywords, resolve_ebay_search
+from product_keywords import resolve_market_keyword
+
+
+MIN_LISTINGS_PER_SOURCE = 3
+MIN_SOURCES_FOR_MEDIAN = 2
 
 
 def median_price(*values: Optional[float]) -> Optional[float]:
@@ -18,32 +22,71 @@ def median_price(*values: Optional[float]) -> Optional[float]:
 
 
 def market_keyword_for_card(
+    card: dict[str, Any],
+) -> str:
+    """Mot-clé de recherche marché — priorité keyword/URL manuels puis build_keyword."""
+    return resolve_market_keyword(card)
+
+
+def market_keyword_for_card_legacy(
     nom: str,
     extension: str = "",
     *,
     langue: str = "FR",
     ebay_keyword: Optional[str] = None,
     ebay_url: Optional[str] = None,
+    type_produit: str = "single",
+    numero_carte: Optional[str] = None,
+    code_set: Optional[str] = None,
+    nom_en: Optional[str] = None,
 ) -> str:
-    """Mot-clé de recherche marché (eBay / Vinted) — même logique que eBay."""
-    plan = resolve_ebay_search(
-        nom,
-        extension,
-        langue=langue,
-        ebay_keyword=ebay_keyword,
-        ebay_url=ebay_url,
+    return resolve_market_keyword(
+        {
+            "nom": nom,
+            "extension": extension,
+            "langue": langue,
+            "ebay_keyword": ebay_keyword,
+            "ebay_url": ebay_url,
+            "type_produit": type_produit,
+            "numero_carte": numero_carte,
+            "code_set": code_set,
+            "nom_en": nom_en,
+        }
     )
-    if plan.keywords:
-        return plan.keywords
-    return build_keywords(nom, extension, langue)
 
 
 def compute_reference_median(
     prix_cm: Optional[float],
     prix_ebay_actif: Optional[float],
     prix_vinted: Optional[float],
+    *,
+    nb_ebay: int = 0,
+    nb_vinted: int = 0,
 ) -> Optional[float]:
-    return median_price(prix_cm, prix_ebay_actif, prix_vinted)
+    """
+    Médiane sur les sources disponibles.
+    - eBay / Vinted : inclus seulement si >= 3 annonces
+    - CardMarket : inclus si prix_actuel présent
+    - Médiane None si < 2 sources valides
+    """
+    values: list[float] = []
+    if prix_cm is not None and prix_cm > 0:
+        values.append(float(prix_cm))
+    if (
+        prix_ebay_actif is not None
+        and prix_ebay_actif > 0
+        and nb_ebay >= MIN_LISTINGS_PER_SOURCE
+    ):
+        values.append(float(prix_ebay_actif))
+    if (
+        prix_vinted is not None
+        and prix_vinted > 0
+        and nb_vinted >= MIN_LISTINGS_PER_SOURCE
+    ):
+        values.append(float(prix_vinted))
+    if len(values) < MIN_SOURCES_FOR_MEDIAN:
+        return None
+    return median_price(*values)
 
 
 def deal_score_label(prix_achat: Optional[float], prix_reference: Optional[float]) -> dict[str, Any]:
