@@ -9,7 +9,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from uuid import UUID
 
 import httpx
@@ -55,6 +55,7 @@ from scraper import scrape_cardmarket_url
 from ebay import fetch_sold_items, get_cached_sales, sync_pokedex_sales
 from ebay_browse import fetch_active_listings, stats_from_active_listings
 from market_sync import sync_all_market_prices
+from product_keywords import detect_type_from_url, extract_set_name_from_url
 from vinted_api import fetch_vinted_listings
 
 _ROOT = Path(__file__).resolve().parent
@@ -758,6 +759,65 @@ async def dashboard_charts():
             "valeur_stock_mediane": [kpis.get("valeur_stock", 0)],
             "chiffre_affaires": [0],
         }
+
+
+# ─── Admin ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/fix-products")
+async def fix_products():
+    """
+    Détecte le type_produit de chaque carte depuis son URL CardMarket
+    et met à jour la base. Idempotent.
+    """
+    sb = get_supabase()
+    cards = (
+        sb.table("pokedex")
+        .select("id, nom, url_cardmarket, type_produit")
+        .execute()
+        .data
+        or []
+    )
+    updates: list[dict] = []
+    unchanged = 0
+    undetected = 0
+    for c in cards:
+        url = c.get("url_cardmarket") or ""
+        detected = detect_type_from_url(url)
+        if detected is None:
+            undetected += 1
+            continue
+        if (c.get("type_produit") or "") == detected:
+            unchanged += 1
+            continue
+        patch: dict[str, Any] = {"type_produit": detected}
+        if detected != "single":
+            set_name = extract_set_name_from_url(url)
+            if set_name and not (c.get("nom_en") or "").strip():
+                patch["nom_en"] = set_name
+        sb.table("pokedex").update(patch).eq("id", c["id"]).execute()
+        updates.append(
+            {
+                "id": c["id"],
+                "nom": c.get("nom"),
+                "type_produit": detected,
+                "nom_en": patch.get("nom_en"),
+            }
+        )
+
+    logger.info(
+        "[admin] fix-products: %s mis à jour, %s inchangés, %s non détectés",
+        len(updates),
+        unchanged,
+        undetected,
+    )
+    return {
+        "success": True,
+        "total": len(cards),
+        "updated": len(updates),
+        "unchanged": unchanged,
+        "undetected": undetected,
+        "details": updates,
+    }
 
 
 # ─── Sync marché (eBay actif + Vinted) ─────────────────────────────────────
