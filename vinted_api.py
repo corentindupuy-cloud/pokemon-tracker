@@ -12,6 +12,9 @@ from vinted import VintedClient
 
 from product_keywords import (
     build_keyword,
+    detect_type_from_url,
+    extract_set_name_from_url,
+    is_sealed_type,
     min_price_for_type,
     resolve_market_keyword,
     title_matches,

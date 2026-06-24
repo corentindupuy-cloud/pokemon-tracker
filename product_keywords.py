@@ -132,6 +132,19 @@ def is_sealed_type(type_produit: str) -> bool:
 
 def title_tokens_for_card(card: dict[str, Any]) -> list[str]:
     """Mots du nom utilisés pour filtrer les titres d'annonces."""
+    url = card.get("url_cardmarket") or ""
+    type_produit = (
+        card.get("type_produit")
+        or detect_type_from_url(url)
+        or "single"
+    ).lower()
+
+    if type_produit != "single":
+        set_name = (card.get("nom_en") or "").strip() or extract_set_name_from_url(url)
+        raw = set_name or _nom_court(card.get("nom", ""))
+        words = re.findall(r"[a-zàâäéèêëïîôùûüç0-9]{3,}", raw.lower(), re.I)
+        return [w for w in words if w not in _STOP_WORDS]
+
     nom = _nom_court(card.get("nom", ""))
     nom_en = (card.get("nom_en") or "").strip()
     numero = (card.get("numero_carte") or "").strip()

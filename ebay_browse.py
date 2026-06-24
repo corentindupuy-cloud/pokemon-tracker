@@ -153,7 +153,7 @@ async def fetch_active_listings(
     keyword: str,
     *,
     limit: int = EBAY_BROWSE_DEFAULT_LIMIT,
-    category_id: str = EBAY_CATEGORY_POKEMON,
+    category_id: Optional[str] = EBAY_CATEGORY_POKEMON,
     sort: str = "price",
 ) -> list[EbayActiveListing]:
     """
@@ -166,13 +166,14 @@ async def fetch_active_listings(
         return []
 
     token = await get_access_token()
-    params = {
+    params: dict[str, str] = {
         "q": q,
-        "category_ids": category_id,
         "filter": EBAY_BROWSE_CONDITION_FILTER,
         "sort": sort,
         "limit": str(min(max(limit, 1), 200)),
     }
+    if category_id:
+        params["category_ids"] = category_id
     headers = {
         "Authorization": f"Bearer {token}",
         "X-EBAY-C-MARKETPLACE-ID": _marketplace_id(),

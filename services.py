@@ -637,3 +637,10 @@ def get_dashboard_kpis() -> dict[str, Any]:
             if s.get("statut") == "Vendu"
         ),
     }
+
+
+async def sync_market_prices(*, delay_s: float = 1.5) -> dict[str, Any]:
+    """Alias — sync eBay actif + Vinted + médiane (voir market_sync.py)."""
+    from market_sync import sync_all_market_prices
+
+    return await sync_all_market_prices(delay_s=delay_s)

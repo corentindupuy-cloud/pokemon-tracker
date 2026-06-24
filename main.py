@@ -53,9 +53,9 @@ from services import (
 )
 from scraper import scrape_cardmarket_url
 from ebay import fetch_sold_items, get_cached_sales, sync_pokedex_sales
-from ebay_browse import fetch_active_listings, stats_from_active_listings
+from ebay_browse import EBAY_CATEGORY_POKEMON, fetch_active_listings, stats_from_active_listings
 from market_sync import sync_all_market_prices
-from product_keywords import detect_type_from_url, extract_set_name_from_url
+from product_keywords import detect_type_from_url, extract_set_name_from_url, is_sealed_type
 from vinted_api import fetch_vinted_listings
 
 _ROOT = Path(__file__).resolve().parent
@@ -889,11 +889,15 @@ async def vinted_active(
 # ─── eBay ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/ebay/active", response_model=EbayActiveResponse)
-async def ebay_active(q: str = Query(..., min_length=2, description="Mot-clé recherche eBay")):
+async def ebay_active(
+    q: str = Query(..., min_length=2, description="Mot-clé recherche eBay"),
+    type_produit: str = Query("single", description="Type produit (scellé = sans catégorie singles)"),
+):
     """Annonces actives eBay (Browse REST API) + stats prix demandés."""
     keyword = q.strip()
+    category_id = None if is_sealed_type(type_produit) else EBAY_CATEGORY_POKEMON
     try:
-        listings = await fetch_active_listings(keyword)
+        listings = await fetch_active_listings(keyword, category_id=category_id)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc)) from exc
     except httpx.HTTPStatusError as exc:
